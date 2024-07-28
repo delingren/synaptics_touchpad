@@ -20,56 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include "src/hid.h"
 #include "src/ps2.h"
-#include <HID.h>
-// PS2 protocol: https://wiki.osdev.org/PS/2_Mouse
-
-void hid_init() {
-  static const uint8_t hidReportDescriptor[] PROGMEM = {
-
-      //  Mouse
-      0x05, 0x01, // USAGE_PAGE (Generic Desktop)  // 54
-      0x09, 0x02, // USAGE (Mouse)
-      0xa1, 0x01, // COLLECTION (Application)
-      0x09, 0x01, //   USAGE (Pointer)
-      0xa1, 0x00, //   COLLECTION (Physical)
-      0x85, 0x01, //     REPORT_ID (1)
-      0x05, 0x09, //     USAGE_PAGE (Button)
-      0x19, 0x01, //     USAGE_MINIMUM (Button 1)
-      0x29, 0x03, //     USAGE_MAXIMUM (Button 3)
-      0x15, 0x00, //     LOGICAL_MINIMUM (0)
-      0x25, 0x01, //     LOGICAL_MAXIMUM (1)
-      0x95, 0x03, //     REPORT_COUNT (3)
-      0x75, 0x01, //     REPORT_SIZE (1)
-      0x81, 0x02, //     INPUT (Data,Var,Abs)
-      0x95, 0x01, //     REPORT_COUNT (1)
-      0x75, 0x05, //     REPORT_SIZE (5)
-      0x81, 0x03, //     INPUT (Cnst,Var,Abs)
-      0x05, 0x01, //     USAGE_PAGE (Generic Desktop)
-      0x09, 0x30, //     USAGE (X)
-      0x09, 0x31, //     USAGE (Y)
-      0x09, 0x38, //     USAGE (Wheel)
-      0x15, 0x81, //     LOGICAL_MINIMUM (-127)
-      0x25, 0x7f, //     LOGICAL_MAXIMUM (127)
-      0x75, 0x08, //     REPORT_SIZE (8)
-      0x95, 0x03, //     REPORT_COUNT (3)
-      0x81, 0x06, //     INPUT (Data,Var,Rel)
-      0xc0,       //   END_COLLECTION
-      0xc0,       // END_COLLECTION
-  };
-  static HIDSubDescriptor node(hidReportDescriptor,
-                               sizeof(hidReportDescriptor));
-  HID().AppendDescriptor(&node);
-}
-
-void hid_report(uint8_t buttons, int8_t x, int8_t y) {
-  uint8_t m[4];
-  m[0] = buttons;
-  m[1] = x;
-  m[2] = y;
-  m[3] = 0; // wheel
-  HID().SendReport(1, m, sizeof(m));
-}
 
 int8_t to_hid_value(bool overflow, bool negative, uint8_t data) {
   // HID uses [-127, 127]. I.e. an 8-bit signed integer, except -128.
@@ -105,7 +57,7 @@ void process_pending_packet() {
   int8_t x = to_hid_value(x_overflow, x_negative, x_value);
   int8_t y = to_hid_value(y_overflow, y_negative, y_value);
 
-  hid_report(left | right << 1 | middle << 2, x, -y);
+  hid::report(left | right << 1 | middle << 2, x, -y, 0);
 
   Serial.print("L: ");
   Serial.print(left);
@@ -113,10 +65,6 @@ void process_pending_packet() {
   Serial.print(middle);
   Serial.print(" R: ");
   Serial.print(right);
-  Serial.print(" X: ");
-  Serial.print(x);
-  Serial.print(" Y: ");
-  Serial.print(y);
   Serial.println();
 }
 
@@ -135,7 +83,7 @@ void byte_received(uint8_t data) {
 }
 
 void setup() {
-  hid_init();
+  hid::init();
 
   ps2::begin(0, 1, byte_received);
   ps2::reset();

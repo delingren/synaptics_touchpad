@@ -24,7 +24,7 @@
 namespace ps2 {
 // Sample code for interacting with a PS2 mouse from a mega32u4.
 // Writing is synchronous. Async write is hard for the client to handle.
-namespace { // anonymous namespace to hide code from the client.
+namespace {  // anonymous namespace to hide code from the client.
 // On atmel mega32u4, clock_pin needs to be one of these: 0, 1, 2, 3, 7,
 // otherwise, we need to use pin change interrupt.
 int clock_pin_;
@@ -36,7 +36,9 @@ void pull_low(uint8_t pin) {
   digitalWrite(pin, LOW);
 }
 
-void pull_high(uint8_t pin) { pinMode(pin, INPUT_PULLUP); }
+void pull_high(uint8_t pin) {
+  pinMode(pin, INPUT_PULLUP);
+}
 
 uint8_t read_bit() {
   pinMode(data_pin_, INPUT);
@@ -155,24 +157,8 @@ uint8_t read_byte() {
 
   return data;
 }
-} // namespace
 
-void begin(uint8_t clock_pin, uint8_t data_pin,
-           void (*byte_received)(uint8_t)) {
-  clock_pin_ = clock_pin;
-  data_pin_ = data_pin;
-  byte_received_ = byte_received;
-
-  pull_high(clock_pin);
-  pull_high(data_pin);
-
-  attachInterrupt(digitalPinToInterrupt(clock_pin_), bit_received, FALLING);
-}
-
-void write_byte(uint8_t data, int responses = 1) {
-  uint8_t oldSREG = SREG;
-  disable_interrupt();
-
+bool write_byte(uint8_t data) {
   // Bring CLK low for 100 us.
   pull_low(clock_pin_);
   delayMicroseconds(100);
@@ -218,10 +204,47 @@ void write_byte(uint8_t data, int responses = 1) {
     Serial.println("Line control error.");
   }
 
-  for (int i = 0; i < responses; i++) {
-    read_byte();
+  uint8_t ack = read_byte();
+  if (ack != 0xFA) {
+    Serial.println("Error: did not receive ACK");
+    return false;
+  }
+}
+}  // namespace
+
+void begin(uint8_t clock_pin, uint8_t data_pin,
+           void (*byte_received)(uint8_t)) {
+  clock_pin_ = clock_pin;
+  data_pin_ = data_pin;
+  byte_received_ = byte_received;
+
+  pull_high(clock_pin);
+  pull_high(data_pin);
+
+  attachInterrupt(digitalPinToInterrupt(clock_pin_), bit_received, FALLING);
+}
+
+bool ps2_command(u16 command, uint8_t* args, uint8_t* result) {
+  uint8_t oldSREG = SREG;
+  disable_interrupt();
+
+  unsigned int send = (command >> 12) & 0x0F;
+  unsigned int receive = (command >> 8) & 0x0F;
+  write_byte(command & 0xFF);
+
+  for (int i = 0; i < send; i++) {
+    write_byte(args[i]);
+  }
+
+  for (int i = 0; i < receive; i++) {
+    uint8_t response = read_byte();
+    if (result != nullptr) {
+      result[i] = response;
+    }
   }
 
   SREG = oldSREG;
+  return true;
 }
-}; // namespace ps2
+
+};  // namespace ps2
