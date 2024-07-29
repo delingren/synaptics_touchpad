@@ -50,28 +50,54 @@ void process_pending_packet() {
   uint64_t data = pending_packet;
   has_pending_packet = false;
 
-  // Packet format: 3.2.1, figure 3-4
-  uint16_t y =
-      (data >> 40) & 0x00FF | (data >> 4) & 0x0F00 | (data >> 17) & 0x1000;
-  uint16_t x =
-      (data >> 32) & 0x00FF | (data >> 0) & 0x0F00 | (data >> 16) & 0x1000;
-  uint8_t z = (data >> 16) & 0xFF;
-  uint8_t w = (data >> 26) & 0x01 | (data >> 2) & 0x2 | (data >> 2) & 0x0C;
+  uint8_t w = (data >> 26) & 0x01 | (data >> 1) & 0x2 | (data >> 2) & 0x0C;
 
-  // Serial.println(w, HEX);
+  if (w != 2) {
+    // Packet format: 3.2.1, figure 3-4
+    uint16_t y =
+        (data >> 40) & 0x00FF | (data >> 4) & 0x0F00 | (data >> 17) & 0x1000;
+    uint16_t x =
+        (data >> 32) & 0x00FF | (data >> 0) & 0x0F00 | (data >> 16) & 0x1000;
+    uint8_t z = (data >> 16) & 0xFF;
+    
+    // A clickpad reprots its button as a middle/up button. This pad doesn't have
+    // left or right buttons.
+    bool button = (data >> 24) & 0x01;
+    // 3.2.6 W=0: 2 fingers, W=1: 3 or more fingers, W>=4: finger/palm width
+    int fingers = z == 0 ? 0 : (w == 0 ? 2 : (w == 1 ? 3 : 1));
 
-  // A clickpad reprots its button as a middle/up button. This pad doesn't have
-  // left or right buttons.
-  bool button = (data >> 24) & 0x01;
-  // 3.2.6 W=0: 2 fingers, W=1: 3 or more fingers, W>=4: finger/palm width
-  int fingers = z == 0 ? 0 : (w == 0 ? 2 : (w == 1 ? 3 : 1));
+    // process_report(x, y, z, fingers, button);
 
-  // process_report(x, y, z, fingers, button);
+    static char output[256];
+    sprintf(output, "P. x: %u, y: %u, z: %u, w: %u, fingers: %d, button: %d", x, y, z, w, fingers, button);
+    if (z > 0) {
+      Serial.println(output);
+    }
+  } else {
+    uint8_t packet_code = (data >> 44) & 0x0F;
+    if (packet_code == 1) {
+      // 3.2.9.2. Secondary finger information
+      uint16_t y = (data >> 15) & 0x01FE | (data >> 27) & 0x1E00;
+      uint16_t x = (data >> 7) & 0x01FE | (data >> 23) & 0x1E00;
+      uint8_t z = (data >> 39) & 0x1E | (data >> 31) & 0x60;
 
-  static char output[256];
-  sprintf(output, "x: %u, y: %u, z: %u, fingers: %d, button: %d", x, y, z,
-          fingers, button);
-  Serial.println(output);
+      static char output[256];
+      sprintf(output, "S. x: %u, y: %u, z: %u, w: %u", x, y, z, w);
+      Serial.println(output);
+    } else if (packet_code == 2) {
+      uint8_t finger_count = (data >> 8) & 0x0F;
+      uint8_t primary_index = (data >> 16) & 0xFF;
+      uint8_t secondary_index = (data >> 32) & 0xFF;
+      bool button = (data >> 24) & 0x01;
+
+      static char output[256];
+      sprintf(output, "F. fingers: %d, primary: %u, secondary: %u, button: %d", finger_count, primary_index, secondary_index, button);
+      Serial.println(output);
+    } else {
+      Serial.print("EW Packet code: ");
+      Serial.print(packet_code);
+    }
+  }
 }
 
 enum state { IDLE, TRACKING, SCROLLING };
@@ -160,8 +186,7 @@ void setup() {
 
   ps2::begin(0, 1, byte_received);
   ps2::reset();
-  // absolute, low rate, w=1
-  synaptics::set_mode(0x81);
+  synaptics::set_mode();
 }
 
 void loop() {

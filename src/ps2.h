@@ -27,6 +27,7 @@ namespace ps2 {
 
 // PS2 protocol: https://wiki.osdev.org/PS/2_Mouse
 
+#define PSMOUSE_CMD_SETSCALE11	0x00e6
 #define PSMOUSE_CMD_SETRATE	0x10f3
 #define PSMOUSE_CMD_ENABLE 0x00f4
 #define PSMOUSE_CMD_DISABLE 0x00f5

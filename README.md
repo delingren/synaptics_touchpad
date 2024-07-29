@@ -27,7 +27,7 @@ More info obtained from programatic querys, based on section 4.4. Information qu
 * Query 0x01 (Read TouchPad Modes): 20 87 40.
   - Model 0x0887
 
-* Query 0x02: D0 01 23
+* Query 0x02 (Read Capabilities): D0 01 23
    - Extended capability: yes 
    - Extended queries:
    - Middle button: no
