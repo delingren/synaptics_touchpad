@@ -19,29 +19,73 @@ The first goal is very straight-forward. And here's the implementation with Ardu
 * Physical pinout
 ![Pinout](IMG_0835.jpeg)
 
-More info obtained from programatic querys:
+More info obtained from programatic querys, based on section 4.4. Information queries.
 
-* Query 0x00: 01 47 18
-```
-Version 8.1
-```
+* Query 0x00 (Identify TouchPad): 01 47 18. 
+  - Version 8.1
 
-* Query 0x01: 20 87 40
-```
-Model 0x0887
-```
+* Query 0x01 (Read TouchPad Modes): 20 87 40.
+  - Model 0x0887
 
 * Query 0x02: D0 01 23
-```
-Model sub number: 01
-Middle button: no
-Pass through: no
-Low power: no
-Multi finger report: yes
-Multi finger detect: yes
-Can sleep: no
-Palm detect: yes
-```
+   - Extended capability: yes 
+   - Extended queries:
+   - Middle button: no
+   - Model sub number: 01
+   - Pass through: no
+   - Low power: no
+   - Multi finger report: yes
+   - Can sleep: no
+   - Four buttons: no
+   - Ballitics: no
+   - Multi finger detect: yes
+   - Palm detect: yes
+
+* Query 0x03 (Read Model ID): 01 E2 B1
+ - Absolute mode: yes
+ - Geometry: rectangule
+
+* Query 0x06 (Read Serial Number Prefix): 00 00 00
+
+* Query 0x07 (Read Serial Number Suffix): 00 00 00
+
+* Query 0x08 (Read Resolutions): 2F 80 42
+  - x units per mm: 47
+  - y units per mm: 66
+
+* Query 0x09 (Extended Model ID): 84 03 00
+  - Light control: no
+  - Peak detect: no
+  - Glass pass: no
+  - Vertical wheel: no
+  - Ext. W mode: yes
+  - H Scroll: no
+  - V Scroll: no
+  - Extended buttons: 0
+  - Product ID: 0x00
+
+* Query 0x0C (Continued Capabilities): 12 6C 0
+  - Covered Pad Gesture: no
+  - MultiFinger Mode: 1.0
+  - Advanced Gestures: no
+  - ClearPad: no
+  - Reports Max Coordinates: yes
+  - TouchButton Adjustable Threshold: no
+  - InterTouch: yes
+  - Reports Min Coordinates: yes
+  - Uniform ClickPad: no (Hinged mechanism)
+  - Reports V: yes
+  - No Absolute Position Filter: no
+  - Deluxe LEDs: no
+  - ClickPad: One-button ClickPad
+
+* Query 0x0D (Maximum Coordinates): B1 6B 94
+  - max x: 2843 
+  - max y: 2374
+
+* Query 0x0F (Minimum Coordinates): 27 94 22
+  - min x: 628
+  - min y: 553
 
 ## Packet formats
 
