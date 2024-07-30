@@ -126,7 +126,8 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
     // Serial.println("IDLE");
     if (primary) {
       // Zero, or one, or two fingers pressed. Zero is possible if you press
-      // down the pad at the very edge.
+      // down the pad at the very edge or using a non captive object, such as a
+      // pen.
       last_fingers = fingers;
       last_finger_positions[0][0] = x;
       last_finger_positions[0][1] = y;
