@@ -112,5 +112,52 @@ ISR(PCINT0_vect) {
 }
 ```
 
+## State machine
+We do not support "tap as click". We simulate the behaviour of a MacBook. Most PC laptops behave the same too, with "tap as click" turned off. Whenever I say "two fingers", I refer to two or more fingers. This pad does recognize more fingers but it does not report the position of the third one and beyond. So no useful info can be derived for me, unless I supported three finger swipe, which I do not.
+
+### Idle
+Invariant:
+* fingers == 0 && buttons == 0
+
+Transitions:
+* Button pressed && at least one finger pressed: go to tracking
+* Button pressed && no finger pressed: stay in idle, after reporting the button press
+* 1 finger pressed: go to tracking
+* 2 fingers pressed: to to scrolling
+
+### Tracking
+Invariant:
+* fingers == 1 || (fingers == 2 && buttons != 0)
+When one finger is pressed, we're tracking whether or not the button is pressed. When two fingers are pressed and the button is *not* pressed, we always scroll. But if two fingers are pressed and the button is also pressed, we also track. This is MacBook's behaviour, which is different from an HP Envy x360 I've tried.
+
+Transitions:
+
+fingers == 1
+* Second finger pressed without the button pressed: go to scrolling
+* Second finger pressed and the button pressed: stay in tracking
+* Finger released: go back to idle
+* Button pressed: stay in tracking
+* Button released: stay in tracking
+
+fingers == 2 && buttons != 0
+* Button released: go to scrolling
+* One finger released: stay in tracking
+* Button *and* one finger released: stay in tracking
+* Both fingers released: go to IDLE
+
+### Scrolling
+Invariant:
+* fingers == 2 || buttons == 0
+
+Transitions:
+
+* Button pressed: go to tracking
+* One finger released: go to tracking
+* Both fingers released: go to idle
+* Otherwise: stay in scrolling
+
+### Invalid
+fingers == 0 && buttons != 0
+
 ## Final product:
 ![Breadboard](IMG_0914.jpeg)
