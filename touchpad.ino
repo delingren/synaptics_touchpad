@@ -68,7 +68,7 @@ void process_pending_packet() {
     // finger/palm width
     int fingers = z == 0 ? 0 : (w == 0 ? 2 : (w == 1 ? 3 : 1));
 
-    process_report(true, x, y, z, fingers, button);
+    process_report(true, x, y, z, w, fingers, button);
   } else {
     uint8_t packet_code = (data >> 44) & 0x0F;
     if (packet_code == 1) {
@@ -77,14 +77,12 @@ void process_pending_packet() {
       uint16_t x = (data >> 7) & 0x01FE | (data >> 23) & 0x1E00;
       uint8_t z = (data >> 39) & 0x1E | (data >> 31) & 0x60;
 
-      process_report(false, x, y, z, 2, 0);
+      process_report(false, x, y, z, w, 2, 0);
     }
   }
 }
 
-enum state { IDLE, TRACKING, SCROLLING };
-uint8_t to_hid_value(int16_t value, float scale_factor = 0.25,
-                     uint16_t threshold = 8) {
+uint8_t to_hid_value(int16_t value, float scale_factor, uint16_t threshold) {
   const int16_t min = -127;
   const int16_t max = 127;
   if (abs(value) < threshold) {
@@ -94,7 +92,7 @@ uint8_t to_hid_value(int16_t value, float scale_factor = 0.25,
   return min(max(float_value, min), max);
 }
 
-void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
+void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z, uint8_t w,
                     int fingers, bool button) {
   const uint8_t LEFT_BUTTON = 0x01;
   const uint8_t RIGHT_BUTTON = 0x02;
@@ -102,7 +100,6 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
   static uint8_t last_fingers = 0;
   static uint16_t last_finger_positions[2][2];  // {primary, secondary} * {x, y}
   static uint8_t last_buttons = 0;              // bit 0: L, bit 1: R
-  static state state = IDLE;
 
   if (primary && fingers == 0 && z == 0 && !button) {
     // After all fingers and the button are released, the touchpad keep
@@ -113,9 +110,10 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
       last_fingers = 0;
       hid::report(0, 0, 0, 0);
     }
+    return;
   }
 
-  if (z == 0) {
+  if (!primary && z == 0) {
     return;
   }
 
@@ -147,6 +145,9 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
 
   if (last_fingers == 1) {
     // TRACKING
+    const float scale_factor = 0.25;
+    uint16_t threshold = max(w - 3, 1) * 8;
+
     if (primary) {
       if (fingers > 1) {
         // Second finger pressed.
@@ -174,8 +175,10 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
         }
       }
 
-      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0]);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1]);
+      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0],
+                                    scale_factor, threshold);
+      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
+                                    scale_factor, threshold);
       hid::report(last_buttons, delta_x, -delta_y, 0);
 
       last_fingers = fingers;
@@ -192,6 +195,9 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
 
   if (last_fingers >= 2 && last_buttons != 0) {
     // TRACKING
+    const float scale_factor = 0.25;
+    uint16_t threshold = max(w - 3, 1) * 8;
+
     if (primary) {
       if (button) {
         if (last_buttons == 0) {
@@ -205,8 +211,10 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
         }
       }
 
-      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0]);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1]);
+      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0],
+                                    scale_factor, threshold);
+      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
+                                    scale_factor, threshold);
       hid::report(last_buttons, delta_x, -delta_y, 0);
 
       last_fingers = fingers;
@@ -214,8 +222,10 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
       last_finger_positions[0][1] = y;
     } else {
       // Second finger position update
-      int8_t delta_x = to_hid_value(x - last_finger_positions[1][0]);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1]);
+      int8_t delta_x = to_hid_value(x - last_finger_positions[1][0],
+                                    scale_factor, threshold);
+      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1],
+                                    scale_factor, threshold);
       hid::report(last_buttons, delta_x, -delta_y, 0);
 
       last_finger_positions[1][0] = x;
