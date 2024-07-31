@@ -53,48 +53,40 @@ void process_pending_packet() {
   uint8_t w = (data >> 26) & 0x01 | (data >> 1) & 0x2 | (data >> 2) & 0x0C;
 
   if (w != 2) {
-    // Packet format: 3.2.1, figure 3-4
+    // Reference: 3.2.1, figure 3-4
     uint16_t y =
         (data >> 40) & 0x00FF | (data >> 4) & 0x0F00 | (data >> 17) & 0x1000;
     uint16_t x =
         (data >> 32) & 0x00FF | (data >> 0) & 0x0F00 | (data >> 16) & 0x1000;
     uint8_t z = (data >> 16) & 0xFF;
 
-    // A clickpad reprots its button as a middle/up button. This pad doesn't
-    // have left or right buttons.
+    // A clickpad reprots its button as a middle/up button. This logic needs to
+    // change completely if the touchpad is not a clickpad (i.e. it has physical
+    // buttons).
     bool button = (data >> 24) & 0x01;
-    // 3.2.6 W=0: 2 fingers, W=1: 3 or more fingers, W>=4: finger/palm width
+    // Reference: 3.2.6 W=0: 2 fingers, W=1: 3 or more fingers, W>=4:
+    // finger/palm width
     int fingers = z == 0 ? 0 : (w == 0 ? 2 : (w == 1 ? 3 : 1));
 
     process_report(true, x, y, z, fingers, button);
-
-    // static char output[256];
-    // sprintf(output, "P. x: %u, y: %u, z: %u, w: %u, fingers: %d, button: %d",
-    // x,
-    //         y, z, w, fingers, button);
-
-    // Serial.println(output);
   } else {
     uint8_t packet_code = (data >> 44) & 0x0F;
     if (packet_code == 1) {
-      // 3.2.9.2. Secondary finger information
+      // Reference: 3.2.9.2. Secondary finger information
       uint16_t y = (data >> 15) & 0x01FE | (data >> 27) & 0x1E00;
       uint16_t x = (data >> 7) & 0x01FE | (data >> 23) & 0x1E00;
       uint8_t z = (data >> 39) & 0x1E | (data >> 31) & 0x60;
 
       process_report(false, x, y, z, 2, 0);
-
-      // static char output[256];
-      // sprintf(output, "S. x: %u, y: %u, z: %u, w: %u", x, y, z, w);
-      // Serial.println(output);
     }
   }
 }
 
 enum state { IDLE, TRACKING, SCROLLING };
 uint8_t to_hid_value(int16_t value, float scale_factor = 0.25,
-                     int16_t min = -127, int16_t max = 127) {
-  const uint16_t threshold = 8;
+                     uint16_t threshold = 8) {
+  const int16_t min = -127;
+  const int16_t max = 127;
   if (abs(value) < threshold) {
     return 0;
   }
@@ -113,17 +105,22 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
   static state state = IDLE;
 
   if (primary && fingers == 0 && z == 0 && !button) {
+    // After all fingers and the button are released, the touchpad keep
+    // reporting for 1 second. But we only need to report it once and ignore the
+    // rest of the packets.
     if (last_buttons != 0 || last_fingers != 0) {
       last_buttons = 0;
       last_fingers = 0;
       hid::report(0, 0, 0, 0);
     }
+  }
+
+  if (z == 0) {
     return;
   }
 
   if (last_fingers == 0 && last_buttons == 0) {
     // IDLE
-    // Serial.println("IDLE");
     if (primary) {
       // Zero, or one, or two fingers pressed. Zero is possible if you press
       // down the pad at the very edge or using a non captive object, such as a
@@ -150,7 +147,6 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
 
   if (last_fingers == 1) {
     // TRACKING
-    // Serial.println("TRACKING, 1 finger.");
     if (primary) {
       if (fingers > 1) {
         // Second finger pressed.
@@ -194,9 +190,8 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
     return;
   }
 
-  if (last_fingers == 2 && last_buttons != 0) {
+  if (last_fingers >= 2 && last_buttons != 0) {
     // TRACKING
-    // Serial.println("TRACKING, 2 fingers.");
     if (primary) {
       if (button) {
         if (last_buttons == 0) {
@@ -229,9 +224,11 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
     return;
   }
 
-  if (last_fingers == 2 && last_buttons == 0) {
+  if (last_fingers >= 2 && last_buttons == 0) {
     // SCROLLING
-    // Serial.println("SCROLLING");
+    const float scale_factor = 0.04;
+    const uint16_t threshold = 3;
+
     if (primary) {
       if (button) {
         last_buttons = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
@@ -239,7 +236,8 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
         last_buttons = 0;
       }
 
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1], 0.01);
+      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
+                                    scale_factor, threshold);
       if (last_buttons == 0) {
         hid::report(0, 0, 0, delta_y);
       }
@@ -248,7 +246,8 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
       last_finger_positions[0][0] = x;
       last_finger_positions[0][1] = y;
     } else {
-      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1], 0.01);
+      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1],
+                                    scale_factor, threshold);
       hid::report(0, 0, 0, delta_y);
 
       last_finger_positions[1][0] = x;
@@ -258,7 +257,6 @@ void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z,
 }
 
 void setup() {
-  Serial.begin(115200);
   hid::init();
 
   ps2::begin(0, 1, byte_received);
