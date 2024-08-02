@@ -7,10 +7,10 @@
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// furnished to do so, subject tsubstano the following conditions:
 
 // The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
+// all copies or tial portions of the Software.
 
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -25,6 +25,18 @@
 #include "src/hid.h"
 #include "src/ps2.h"
 #include "src/synaptics.h"
+
+const float scale_x = 0.4;
+const float scale_y = -0.4;
+const float scale_scroll = 0.04;
+const int movement_threshold = 2;
+const int closeness_threshold = 15;
+
+struct finger_state {
+  SimpleAverage<int, 5> x;
+  SimpleAverage<int, 5> y;
+  short z;
+};
 
 volatile uint64_t pending_packet;
 volatile bool has_pending_packet = false;
@@ -52,221 +64,200 @@ void process_pending_packet() {
 
   uint8_t w = (data >> 26) & 0x01 | (data >> 1) & 0x2 | (data >> 2) & 0x0C;
 
-  if (w != 2) {
-    // Reference: 3.2.1, figure 3-4
-    uint16_t y =
-        (data >> 40) & 0x00FF | (data >> 4) & 0x0F00 | (data >> 17) & 0x1000;
-    uint16_t x =
-        (data >> 32) & 0x00FF | (data >> 0) & 0x0F00 | (data >> 16) & 0x1000;
-    uint8_t z = (data >> 16) & 0xFF;
-
-    // A clickpad reprots its button as a middle/up button. This logic needs to
-    // change completely if the touchpad is not a clickpad (i.e. it has physical
-    // buttons).
-    bool button = (data >> 24) & 0x01;
-    // Reference: 3.2.6 W=0: 2 fingers, W=1: 3 or more fingers, W>=4:
-    // finger/palm width
-    int fingers = z == 0 ? 0 : (w == 0 ? 2 : (w == 1 ? 3 : 1));
-
-    process_report(true, x, y, z, w, fingers, button);
-  } else {
-    uint8_t packet_code = (data >> 44) & 0x0F;
-    if (packet_code == 1) {
-      // Reference: 3.2.9.2. Secondary finger information
-      uint16_t y = (data >> 15) & 0x01FE | (data >> 27) & 0x1E00;
-      uint16_t x = (data >> 7) & 0x01FE | (data >> 23) & 0x1E00;
-      uint8_t z = (data >> 39) & 0x1E | (data >> 31) & 0x60;
-
-      process_report(false, x, y, z, w, 2, 0);
-    }
+  switch (w) {
+    case 3:  // pass through
+      return;
+    case 2:  // extended w mode
+      parse_extended_packet(data);
+      return;
+    default:
+      parse_normal_packet(data, w);
+      return;
   }
 }
 
-uint8_t to_hid_value(int16_t value, float scale_factor, uint16_t threshold) {
-  const int16_t min = -127;
-  const int16_t max = 127;
+int8_t to_hid_value(float value, float scale_factor, int threshold) {
+  const int8_t min = -127;
+  const int8_t max = 127;
   if (abs(value) < threshold) {
     return 0;
   }
-  float float_value = ((float)value) * scale_factor;
-  return min(max(float_value, min), max);
+  return min(max(value * scale_factor, min), max);
 }
 
-void process_report(bool primary, uint16_t x, uint16_t y, uint8_t z, uint8_t w,
-                    int fingers, bool button) {
-  const uint8_t LEFT_BUTTON = 0x01;
-  const uint8_t RIGHT_BUTTON = 0x02;
+static finger_state finger_states[2];
+static short finger_count = 0;
+static uint8_t button_state = 0;  // bit 0: L, bit 1: R
+const uint8_t LEFT_BUTTON = 0x01;
+const uint8_t RIGHT_BUTTON = 0x02;
 
-  static uint8_t last_fingers = 0;
-  static uint16_t last_finger_positions[2][2];  // {primary, secondary} * {x, y}
-  static uint8_t last_buttons = 0;              // bit 0: L, bit 1: R
+void parse_normal_packet(uint64_t packet, int w) {
+  // Reference: Section 3.2.1, Figure 3-4
+  int x = (packet >> 32) & 0x00FF | (packet >> 0) & 0x0F00 |
+          (packet >> 16) & 0x1000;
+  int y = (packet >> 40) & 0x00FF | (packet >> 4) & 0x0F00 |
+          (packet >> 17) & 0x1000;
+  short z = (packet >> 16) & 0xFF;
 
-  if (primary && fingers == 0 && z == 0 && !button) {
+  // A clickpad reprots its button as a middle/up button. This logic needs to
+  // change completely if the touchpad is not a clickpad (i.e. it has physical
+  // buttons).
+  bool button = (packet >> 24) & 0x01;
+  int fingers = 0;
+  if (z == 0) {
+    fingers = 0;
+  } else if (w >= 4) {
+    fingers = 1;
+  } else if (w == 0) {
+    fingers = 2;
+  } else if (w == 1) {
+    fingers = 3;
+  }
+
+  if (fingers == 0 && z == 0 && !button) {
     // After all fingers and the button are released, the touchpad keep
-    // reporting for 1 second. But we only need to report it once and ignore the
-    // rest of the packets.
-    if (last_buttons != 0 || last_fingers != 0) {
-      last_buttons = 0;
-      last_fingers = 0;
+    // reporting for 1 second. But we only need to report it once and ignore
+    // the rest of the packets.
+    if (button_state != 0 || finger_count != 0) {
+      button_state = 0;
+      finger_count = 0;
       hid::report(0, 0, 0, 0);
     }
     return;
   }
 
-  if (!primary && z == 0) {
-    return;
+  if (fingers > finger_count) {
+    finger_states[1].x.reset();
+    finger_states[1].y.reset();
+    if (finger_count == 0) {
+      finger_states[0].x.reset();
+      finger_states[0].y.reset();
+    }
   }
 
-  if (last_fingers == 0 && last_buttons == 0) {
-    // IDLE
-    if (primary) {
-      // Zero, or one, or two fingers pressed. Zero is possible if you press
-      // down the pad at the very edge or using a non captive object, such as a
-      // pen.
-      last_fingers = fingers;
-      last_finger_positions[0][0] = x;
-      last_finger_positions[0][1] = y;
-
-      if (button) {
-        last_buttons = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
-      }
-      hid::report(last_buttons, 0, 0, 0);
-    } else {
-      // Two fingers pressed. Start SCROLLING!
-      // It is possible that the button is also pressed. But we cannot tell from
-      // this packet. If that is indeed the case, we will get a primary finger
-      // packet with that info and transition into tracking.
-      last_fingers = 2;
-      last_finger_positions[1][0] = x;
-      last_finger_positions[1][1] = y;
+  if (finger_count > 1 && fingers == 1) {
+    // When a primary finger is released, the secondary becomes the primary.
+    // We determine if that is happening be checking if the finger location is
+    // close to the previous secondary finger. closeness_threshold is an
+    // emperical number and not always reliable. We err on the conservative
+    // side. If we can't be sure, just reset the state. This could result in a
+    // slightly jerky cursor movement.
+    if (abs(x - finger_states[1].x.average()) < closeness_threshold &&
+        abs(y - finger_states[1].y.average()) < closeness_threshold) {
+      finger_states[0] = finger_states[1];
+    } else if (abs(x - finger_states[0].x.average()) >= closeness_threshold ||
+               abs(y - finger_states[0].y.average()) >= closeness_threshold) {
+      finger_states[0].x.reset();
+      finger_states[0].y.reset();
     }
-    return;
   }
 
-  if (last_fingers == 1) {
-    // TRACKING
-    const float scale_factor = 0.25;
-    uint16_t threshold = max(w - 3, 1) * 8;
+  int16_t delta_x = 0, delta_y = 0;
+  bool movement_as_scroll = false;
 
-    if (primary) {
-      if (fingers > 1) {
-        // Second finger pressed.
-        if (button) {
-          // The buton press is considered a right press only if no button was
-          // pressed previously. Otherwise we would change a left press to a
-          // right press in the middle of a drag.
-          if (last_buttons == 0) {
-            last_buttons = RIGHT_BUTTON;
-          }
-        } else {
-          // Start SCROLLING
-          // TODO: do not report
-          last_buttons = 0;
-        }
-      } else {
-        if (button) {
-          // Similarly, we don't change a right press to a left press during a
-          // drag.
-          if (last_buttons == 0) {
-            last_buttons = LEFT_BUTTON;
-          }
-        } else {
-          last_buttons = 0;
-        }
-      }
+  if (fingers > 0) {
+    finger_states[0].z = z;
 
-      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0],
-                                    scale_factor, threshold);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
-                                    scale_factor, threshold);
-      hid::report(last_buttons, delta_x, -delta_y, 0);
-
-      last_fingers = fingers;
-      last_finger_positions[0][0] = x;
-      last_finger_positions[0][1] = y;
-    } else {
-      // Second finger pressed.
-      last_fingers = 2;
-      last_finger_positions[1][0] = x;
-      last_finger_positions[1][1] = y;
+    int prev_x = finger_states[0].x.average();
+    int new_x = finger_states[0].x.filter(x);
+    if (prev_x > 0 && fingers == finger_count) {
+      delta_x = new_x - prev_x;
     }
-    return;
+
+    int prev_y = finger_states[0].y.average();
+    int new_y = finger_states[0].y.filter(y);
+    if (prev_y > 0 && fingers == finger_count) {
+      delta_y = new_y - prev_y;
+    }
   }
 
-  if (last_fingers >= 2 && last_buttons != 0) {
-    // TRACKING
-    const float scale_factor = 0.25;
-    uint16_t threshold = max(w - 3, 1) * 8;
-
-    if (primary) {
-      if (button) {
-        if (last_buttons == 0) {
-          last_buttons = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
-        }
-      } else {
-        last_buttons = 0;
-        if (fingers > 1) {
-          // Start SCROLLING
-          // TODO: do not report
-        }
-      }
-
-      int8_t delta_x = to_hid_value(x - last_finger_positions[0][0],
-                                    scale_factor, threshold);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
-                                    scale_factor, threshold);
-      hid::report(last_buttons, delta_x, -delta_y, 0);
-
-      last_fingers = fingers;
-      last_finger_positions[0][0] = x;
-      last_finger_positions[0][1] = y;
-    } else {
-      // Second finger position update
-      int8_t delta_x = to_hid_value(x - last_finger_positions[1][0],
-                                    scale_factor, threshold);
-      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1],
-                                    scale_factor, threshold);
-      hid::report(last_buttons, delta_x, -delta_y, 0);
-
-      last_finger_positions[1][0] = x;
-      last_finger_positions[1][1] = y;
+  // Determine state.
+  if (finger_count == 0 && button_state == 0) {
+    // idle
+    if (button) {
+      button_state = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
     }
-    return;
   }
 
-  if (last_fingers >= 2 && last_buttons == 0) {
-    // SCROLLING
-    const float scale_factor = 0.04;
-    const uint16_t threshold = 3;
-
-    if (primary) {
-      if (button) {
-        last_buttons = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
-      } else {
-        last_buttons = 0;
+  if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
+    // 1-finger tracking or 2-finger tracking
+    if (button) {
+      // If the button is already pressed, we don't change between left and
+      // right while dragging.
+      if (button_state == 0) {
+        button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
       }
-
-      int8_t delta_y = to_hid_value(y - last_finger_positions[0][1],
-                                    scale_factor, threshold);
-      if (last_buttons == 0) {
-        hid::report(0, 0, 0, delta_y);
-      }
-
-      last_fingers = fingers;
-      last_finger_positions[0][0] = x;
-      last_finger_positions[0][1] = y;
     } else {
-      int8_t delta_y = to_hid_value(y - last_finger_positions[1][1],
-                                    scale_factor, threshold);
-      hid::report(0, 0, 0, delta_y);
-
-      last_finger_positions[1][0] = x;
-      last_finger_positions[1][1] = y;
+      button_state = 0;
     }
+  }
+
+  if (finger_count >= 2 && button_state == 0) {
+    // scrolling
+    movement_as_scroll = true;
+    if (button) {
+      // It's OK to change between left and right while scrolling.
+      button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
+    } else {
+      button_state = 0;
+    }
+  }
+
+  finger_count = fingers;
+
+  if (movement_as_scroll) {
+    hid::report(button_state, 0, 0,
+                to_hid_value(delta_y, scale_scroll, movement_threshold));
+  } else {
+    hid::report(button_state,
+                to_hid_value(delta_x, scale_x, movement_threshold),
+                to_hid_value(delta_y, scale_y, movement_threshold), 0);
+  }
+}
+
+void parse_extended_packet(uint64_t packet) {
+  uint8_t packet_code = (packet >> 44) & 0x0F;
+  if (packet_code == 1) {
+    // Reference: Section 3.2.9.2. Figure 3-14
+    int x = (packet >> 7) & 0x01FE | (packet >> 23) & 0x1E00;
+    int y = (packet >> 15) & 0x01FE | (packet >> 27) & 0x1E00;
+    short z = (packet >> 39) & 0x1D | (packet >> 23) & 0x60;
+
+    if (x == 0 || y == 0 || z == 0) {
+      finger_states[1].x.reset();
+      finger_states[1].y.reset();
+      return;
+    }
+
+    int prev_x = finger_states[1].x.average();
+    int new_x = finger_states[1].x.filter(x);
+    int delta_x = prev_x == 0 ? 0 : new_x - prev_x;
+
+    int prev_y = finger_states[1].y.average();
+    int new_y = finger_states[1].y.filter(y);
+    int delta_y = prev_y == 0 ? 0 : new_y - prev_y;
+
+    finger_states[1].x.filter(x);
+    finger_states[1].y.filter(y);
+    finger_states[1].z = z;
+
+    bool movement_as_scroll = finger_count >= 2 && button_state == 0;
+    if (movement_as_scroll) {
+      hid::report(button_state, 0, 0,
+                  to_hid_value(delta_y, scale_scroll, movement_threshold));
+    } else {
+      hid::report(button_state,
+                  to_hid_value(delta_x, scale_x, movement_threshold),
+                  to_hid_value(delta_y, scale_y, movement_threshold), 0);
+    }
+
+  } else {
+    Serial.println("Finger count packet");
   }
 }
 
 void setup() {
+  Serial.begin(115200);
   hid::init();
 
   ps2::begin(0, 1, byte_received);

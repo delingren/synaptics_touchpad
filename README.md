@@ -114,9 +114,10 @@ The rest of this doc focuses on the proprietary Synaptics expansion of the PS2 p
 ## State machine logic
 I am simulating the behaviour of a MacBook since that's what I'm used to. Most PC laptops behave the same too, with "tap to click" feature turned off. In the following text, whenever I say "two fingers", I mean two or more fingers. This pad does recognize more fingers but it does not report the position of the third one and beyond. So no useful info can be derived, unless I supported three finger swipe, which I currently don't.
 
-Future feature expansion:
+TODO:
+* Make it more stable with thumb clicks.
 * Horizontal scrolling. I think this is a standard USB HID feature and should be relatively easy to implement.
-* Three finger swipe. macOS recognize this gesture on MacBooks. I don't know if it's a standard USB mouse feature though.
+* Three finger swipes as back or forward button.
 * Zooming with two fingers.
 
 For now, we only do tracking, scrolling, left and right buttons, where right button click is simulated with a two finger click, just like MacBook. Windows optionally supports this too, as long as the touchpad is multi-touch.
