@@ -20,17 +20,16 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include <math.h>
-
 #include "src/hid.h"
 #include "src/ps2.h"
 #include "src/synaptics.h"
 
-const float scale_x = 0.4;
-const float scale_y = -0.4;
+const float scale_x = 0.35;
+const float scale_y = -0.35;
 const float scale_scroll = 0.04;
 const int movement_threshold = 2;
 const int closeness_threshold = 15;
+const int smoothness_threshold = 200;
 
 struct finger_state {
   SimpleAverage<int, 5> x;
@@ -76,15 +75,17 @@ void process_pending_packet() {
   }
 }
 
-int8_t to_hid_value(float value, float scale_factor, int threshold) {
+int8_t to_hid_value(float value, float scale_factor) {
   const int8_t min = -127;
   const int8_t max = 127;
-  if (abs(value) < threshold) {
+  if (abs(value) < movement_threshold) {
     return 0;
   }
   return min(max(value * scale_factor, min), max);
 }
 
+// State of primary and secondary fingers. We only keep track of two since this
+// touchpad doesn't report the position of the 3rd and doesn't register the 4th.
 static finger_state finger_states[2];
 static short finger_count = 0;
 static uint8_t button_state = 0;  // bit 0: L, bit 1: R
@@ -127,11 +128,40 @@ void parse_normal_packet(uint64_t packet, int w) {
   }
 
   if (fingers > finger_count) {
+    // A finger has been added. Reset the secondary finger state.
     finger_states[1].x.reset();
     finger_states[1].y.reset();
     if (finger_count == 0) {
       finger_states[0].x.reset();
       finger_states[0].y.reset();
+    }
+  }
+
+  if (fingers < finger_count) {
+    // A finger has been released.
+    if (fingers == 1) {
+      // 2 fingers -> 1 finger
+      // When a primary finger is released, the secondary becomes the primary.
+      // We determine if that is happening be checking if the finger location is
+      // close to the previous secondary finger. closeness_threshold is an
+      // emperical number and not always reliable. We err on the conservative
+      // side. If we can't be sure, just reset the state. This could result in a
+      // slightly jerky cursor movement.
+      if (abs(x - finger_states[1].x.average()) < closeness_threshold &&
+          abs(y - finger_states[1].y.average()) < closeness_threshold) {
+        finger_states[0] = finger_states[1];
+      } else if (abs(x - finger_states[0].x.average()) >= closeness_threshold ||
+                 abs(y - finger_states[0].y.average()) >= closeness_threshold) {
+        finger_states[0].x.reset();
+        finger_states[0].y.reset();
+      }
+    } else {
+      // 3 fingers -> 2 fingers or 1 finger.
+      // Let's not bother. Just reset both fingers.
+      finger_states[0].x.reset();
+      finger_states[0].y.reset();
+      finger_states[1].x.reset();
+      finger_states[1].y.reset();
     }
   }
 
@@ -152,7 +182,7 @@ void parse_normal_packet(uint64_t packet, int w) {
     }
   }
 
-  int16_t delta_x = 0, delta_y = 0;
+  int delta_x = 0, delta_y = 0;
   bool movement_as_scroll = false;
 
   if (fingers > 0) {
@@ -206,12 +236,10 @@ void parse_normal_packet(uint64_t packet, int w) {
   finger_count = fingers;
 
   if (movement_as_scroll) {
-    hid::report(button_state, 0, 0,
-                to_hid_value(delta_y, scale_scroll, movement_threshold));
+    hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
   } else {
-    hid::report(button_state,
-                to_hid_value(delta_x, scale_x, movement_threshold),
-                to_hid_value(delta_y, scale_y, movement_threshold), 0);
+    hid::report(button_state, to_hid_value(delta_x, scale_x),
+                to_hid_value(delta_y, scale_y), 0);
   }
 }
 
@@ -237,20 +265,32 @@ void parse_extended_packet(uint64_t packet) {
     int new_y = finger_states[1].y.filter(y);
     int delta_y = prev_y == 0 ? 0 : new_y - prev_y;
 
+    if (abs(delta_x) >= smoothness_threshold ||
+        abs(delta_y) >= smoothness_threshold) {
+      // Sometimes when a 2nd or 3rd finger is released, we receive a secondary
+      // finger position before the finger count change. In this case, the new
+      // secondary finger is not necessarily the same physical finger as
+      // previous one. Not sure if this is by design or due to a packet loss.
+      // In either case, we should not report this position change to avoid
+      // jerky movements. Instead, reset the secondary finger state and start
+      // over.
+      finger_states[1].x.reset();
+      finger_states[1].y.reset();
+      delta_x = 0;
+      delta_y = 0;
+    }
+
     finger_states[1].x.filter(x);
     finger_states[1].y.filter(y);
     finger_states[1].z = z;
 
     bool movement_as_scroll = finger_count >= 2 && button_state == 0;
     if (movement_as_scroll) {
-      hid::report(button_state, 0, 0,
-                  to_hid_value(delta_y, scale_scroll, movement_threshold));
+      hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
     } else {
-      hid::report(button_state,
-                  to_hid_value(delta_x, scale_x, movement_threshold),
-                  to_hid_value(delta_y, scale_y, movement_threshold), 0);
+      hid::report(button_state, to_hid_value(delta_x, scale_x),
+                  to_hid_value(delta_y, scale_y), 0);
     }
-
   } else {
     Serial.println("Finger count packet");
   }
@@ -259,10 +299,12 @@ void parse_extended_packet(uint64_t packet) {
 void setup() {
   Serial.begin(115200);
   hid::init();
-
+  delay(2000);
   ps2::begin(0, 1, byte_received);
   ps2::reset();
+  Serial.println("PS/2 reset complete.");
   synaptics::set_mode();
+  Serial.println("Synaptics set_mode complete.");
 }
 
 void loop() {
