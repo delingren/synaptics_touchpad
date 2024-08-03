@@ -24,10 +24,10 @@
 #include "src/ps2.h"
 #include "src/synaptics.h"
 
-const float scale_x = 0.35;
-const float scale_y = -0.35;
+const float scale_x = 0.3;
+const float scale_y = 0.3;
 const float scale_scroll = 0.02;
-const int movement_threshold = 2;
+const int movement_threshold = 4;
 const int closeness_threshold = 15;
 const int smoothness_threshold = 200;
 
@@ -38,6 +38,8 @@ const int smoothness_threshold = 200;
 #ifndef max
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #endif
+
+#define sign(x) ((x) > 0 ? (1) : ((x) < 0 ? (-1) : (0)))
 
 struct finger_state {
   SimpleAverage<int, 5> x;
@@ -103,12 +105,11 @@ void process_pending_packet() {
 }
 
 int8_t to_hid_value(float value, float scale_factor) {
-  const int8_t min = -127;
-  const int8_t max = 127;
+  const int8_t hid_max = 127;
   if (abs(value) < movement_threshold) {
     return 0;
   }
-  return min(max(value * scale_factor, min), max);
+  return sign(value) * min(max(abs(value) * scale_factor, 1), hid_max);
 }
 
 // State of primary and secondary fingers. We only keep track of two since this
@@ -266,7 +267,7 @@ void parse_normal_packet(uint64_t packet, int w) {
     hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
   } else {
     hid::report(button_state, to_hid_value(delta_x, scale_x),
-                to_hid_value(delta_y, scale_y), 0);
+                -to_hid_value(delta_y, scale_y), 0);
   }
 }
 
@@ -316,7 +317,7 @@ void parse_extended_packet(uint64_t packet) {
       hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
     } else {
       hid::report(button_state, to_hid_value(delta_x, scale_x),
-                  to_hid_value(delta_y, scale_y), 0);
+                  -to_hid_value(delta_y, scale_y), 0);
     }
   } else {
     Serial.println("Finger count packet");

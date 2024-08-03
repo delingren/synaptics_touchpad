@@ -35,7 +35,7 @@ void set_mode() {
 
   ps2::ps2_command(PSMOUSE_CMD_SETSCALE11, nullptr, nullptr);
   ps2::ps2_command(PSMOUSE_CMD_SETSCALE11, nullptr, nullptr);
-  synaptics::special_command(0xC5);
+  synaptics::special_command(0x85);
   sample_rate = 0x14;
   ps2::ps2_command(PSMOUSE_CMD_SETRATE, &sample_rate, nullptr);
 
