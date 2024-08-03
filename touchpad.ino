@@ -26,10 +26,18 @@
 
 const float scale_x = 0.35;
 const float scale_y = -0.35;
-const float scale_scroll = 0.04;
+const float scale_scroll = 0.02;
 const int movement_threshold = 2;
 const int closeness_threshold = 15;
 const int smoothness_threshold = 200;
+
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef max
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#endif
 
 struct finger_state {
   SimpleAverage<int, 5> x;
@@ -48,6 +56,25 @@ void packet_received(uint64_t data) {
 void byte_received(uint8_t data) {
   static uint64_t buffer = 0;
   static int index = 0;
+
+  if (index == 0 && (data & 0xc8) != 0x80) {
+    Serial.print("Unexpected byte0 data ");
+    Serial.println(data, HEX);
+
+    index = 0;
+    buffer = 0;
+    return;
+  }
+
+  if (index == 24 && (data & 0xc8) != 0xc0) {
+    Serial.print("Unexpected byte3 data ");
+    Serial.println(data, HEX);
+
+    index = 0;
+    buffer = 0;
+    return;
+  }
+
   buffer |= ((uint64_t)data) << index;
   index += 8;
   if (index == 48) {
@@ -299,12 +326,13 @@ void parse_extended_packet(uint64_t packet) {
 void setup() {
   Serial.begin(115200);
   hid::init();
-  delay(2000);
-  ps2::begin(0, 1, byte_received);
+  // The pins are quite noisy on startup. Let's wait for a bit before starting
+  // the touchpad. 500ms seems to be a good time. It's still not bullet proof
+  // but the error handling mechanism seems to be able to recover every time.
+  delay(500);
+  ps2::begin(7, 8, byte_received);
   ps2::reset();
-  Serial.println("PS/2 reset complete.");
   synaptics::set_mode();
-  Serial.println("Synaptics set_mode complete.");
 }
 
 void loop() {

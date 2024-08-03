@@ -79,6 +79,8 @@ void disable_interrupt() {
   parity = 0;
 }
 
+void enable_interrupt() { sei(); }
+
 void bit_received() {
   int clock = digitalRead(clock_pin_);
   if (clock != LOW) {
@@ -225,7 +227,6 @@ void begin(uint8_t clock_pin, uint8_t data_pin,
 }
 
 bool ps2_command(uint16_t command, uint8_t* args, uint8_t* result) {
-  uint8_t oldSREG = SREG;
   disable_interrupt();
 
   unsigned int send = (command >> 12) & 0x0F;
@@ -243,7 +244,7 @@ bool ps2_command(uint16_t command, uint8_t* args, uint8_t* result) {
     }
   }
 
-  SREG = oldSREG;
+  enable_interrupt();
   return true;
 }
 
