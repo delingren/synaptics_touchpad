@@ -26,10 +26,12 @@
 
 const float scale_x = 0.3;
 const float scale_y = 0.3;
-const float scale_scroll = 0.02;
+const float scale_scroll = 0.01;
 const int movement_threshold = 4;
 const int closeness_threshold = 15;
 const int smoothness_threshold = 200;
+const int slow_scroll_tipover = 5;
+const int slow_scroll_threshold = 150;
 
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -117,6 +119,7 @@ int8_t to_hid_value(float value, float scale_factor) {
 static finger_state finger_states[2];
 static short finger_count = 0;
 static uint8_t button_state = 0;  // bit 0: L, bit 1: R
+static uint8_t slow_scroll_count = 0;
 const uint8_t LEFT_BUTTON = 0x01;
 const uint8_t RIGHT_BUTTON = 0x02;
 
@@ -211,8 +214,8 @@ void parse_normal_packet(uint64_t packet, int w) {
   }
 
   int delta_x = 0, delta_y = 0;
-  bool movement_as_scroll = false;
 
+  // Update state variables.
   if (fingers > 0) {
     finger_states[0].z = z;
 
@@ -229,12 +232,47 @@ void parse_normal_packet(uint64_t packet, int w) {
     }
   }
 
+  finger_count = fingers;
+
   // Determine state.
   if (finger_count == 0 && button_state == 0) {
     // idle
     if (button) {
       button_state = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
     }
+    hid::report(button_state, 0, 0, 0);
+    return;
+  }
+
+  if (finger_count >= 2 && button_state == 0) {
+    // scrolling
+    if (button) {
+      // It's OK to change between left and right while scrolling.
+      button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
+    } else {
+      button_state = 0;
+    }
+
+    int scroll_amount = to_hid_value(delta_y, scale_scroll);
+    if (abs(delta_y) <= slow_scroll_threshold) {
+      if (++slow_scroll_count == slow_scroll_tipover) {
+        slow_scroll_count = 0;
+      } else {
+        scroll_amount = 0;
+      }
+    } else {
+      slow_scroll_count = 0;
+    }
+
+    hid::report(button_state, 0, 0, scroll_amount);
+
+    if (fingers < 2 || button != 0) {
+      // We are going to leave scrolling state in the next frame. Reset slow
+      // scroll count.
+      slow_scroll_count = 0;
+    }
+
+    return;
   }
 
   if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
@@ -248,26 +286,9 @@ void parse_normal_packet(uint64_t packet, int w) {
     } else {
       button_state = 0;
     }
-  }
-
-  if (finger_count >= 2 && button_state == 0) {
-    // scrolling
-    movement_as_scroll = true;
-    if (button) {
-      // It's OK to change between left and right while scrolling.
-      button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
-    } else {
-      button_state = 0;
-    }
-  }
-
-  finger_count = fingers;
-
-  if (movement_as_scroll) {
-    hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
-  } else {
     hid::report(button_state, to_hid_value(delta_x, scale_x),
                 -to_hid_value(delta_y, scale_y), 0);
+    return;
   }
 }
 
@@ -312,9 +333,18 @@ void parse_extended_packet(uint64_t packet) {
     finger_states[1].y.filter(y);
     finger_states[1].z = z;
 
-    bool movement_as_scroll = finger_count >= 2 && button_state == 0;
-    if (movement_as_scroll) {
-      hid::report(button_state, 0, 0, to_hid_value(delta_y, scale_scroll));
+    if (finger_count >= 2 && button_state == 0) {
+      int scroll_amount = to_hid_value(delta_y, scale_scroll);
+      if (abs(delta_y) <= slow_scroll_threshold) {
+        if (++slow_scroll_count == slow_scroll_tipover) {
+          slow_scroll_count = 0;
+        } else {
+          scroll_amount = 0;
+        }
+      } else {
+        slow_scroll_count = 0;
+      }
+      hid::report(button_state, 0, 0, scroll_amount);
     } else {
       hid::report(button_state, to_hid_value(delta_x, scale_x),
                   -to_hid_value(delta_y, scale_y), 0);
