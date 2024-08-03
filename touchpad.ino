@@ -26,12 +26,12 @@
 
 const float scale_x = 0.3;
 const float scale_y = 0.3;
-const float scale_scroll = 0.01;
+const float scale_scroll = 0.02;
 const int movement_threshold = 4;
 const int closeness_threshold = 15;
 const int smoothness_threshold = 200;
-const int slow_scroll_tipover = 5;
-const int slow_scroll_threshold = 150;
+const int slow_scroll_tipover = 8;
+const int slow_scroll_threshold = 125;
 
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -257,6 +257,7 @@ void parse_normal_packet(uint64_t packet, int w) {
     if (abs(delta_y) <= slow_scroll_threshold) {
       if (++slow_scroll_count == slow_scroll_tipover) {
         slow_scroll_count = 0;
+        scroll_amount = sign(scroll_amount);
       } else {
         scroll_amount = 0;
       }
@@ -338,6 +339,7 @@ void parse_extended_packet(uint64_t packet) {
       if (abs(delta_y) <= slow_scroll_threshold) {
         if (++slow_scroll_count == slow_scroll_tipover) {
           slow_scroll_count = 0;
+          scroll_amount = sign(scroll_amount);
         } else {
           scroll_amount = 0;
         }
