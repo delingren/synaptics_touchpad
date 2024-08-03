@@ -38,9 +38,7 @@ void pull_low(uint8_t pin) {
   digitalWrite(pin, LOW);
 }
 
-void pull_high(uint8_t pin) {
-  pinMode(pin, INPUT_PULLUP);
-}
+void pull_high(uint8_t pin) { pinMode(pin, INPUT_PULLUP); }
 
 uint8_t read_bit() {
   pinMode(data_pin_, INPUT);
@@ -226,7 +224,7 @@ void begin(uint8_t clock_pin, uint8_t data_pin,
   attachInterrupt(digitalPinToInterrupt(clock_pin_), bit_received, FALLING);
 }
 
-bool ps2_command(u16 command, uint8_t* args, uint8_t* result) {
+bool ps2_command(uint16_t command, uint8_t* args, uint8_t* result) {
   uint8_t oldSREG = SREG;
   disable_interrupt();
 
@@ -249,16 +247,10 @@ bool ps2_command(u16 command, uint8_t* args, uint8_t* result) {
   return true;
 }
 
-void reset() {
-  ps2_command(PSMOUSE_CMD_RESET_BAT, nullptr, nullptr);
-}
+void reset() { ps2_command(PSMOUSE_CMD_RESET_BAT, nullptr, nullptr); }
 
-void enable() {
-  ps2_command(PSMOUSE_CMD_ENABLE, nullptr, nullptr);
-}
+void enable() { ps2_command(PSMOUSE_CMD_ENABLE, nullptr, nullptr); }
 
-void disable() {
-  ps2_command(PSMOUSE_CMD_DISABLE, nullptr, nullptr);
-}
+void disable() { ps2_command(PSMOUSE_CMD_DISABLE, nullptr, nullptr); }
 
 };  // namespace ps2
