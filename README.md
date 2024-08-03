@@ -2,18 +2,24 @@
 
 ## Context
 
-I harvested a touchpad from an old HP Envy Sleekbook 6 and wanted to use it as a standalone mouse. 
+I harvested a touchpad from an old HP Envy Sleekbook 6 and wanted to use it as a standalone mouse. It's a clickpad. I.e. it has only one physical button and right click is simulated in software.
 
-Target features:
-
-* Regular mouse functionalities. I.e. cursor movements, left and right clicks.
+Goals:
+* Cursor movements.
+* Left click and right click (with two fingers).
 * Two-finger scrolling.
-* Two finger click as right click.
+* Make a housing for it.
 
-Most touchpads are made by Synaptics. They usually use a PS2 interface. By default (i.e. without any drivers), they can usually simulate a regular PS2 mouse. I.e. they can report finger movements and button clicks. But that's about it. They don't support more sophisticated gestures we normally find on PC or Mac laptops. To achieve those gestures, we need to implement proprietary but published (with some caveats) Synaptics protocols, documented in [Synaptics PS2 TouchPad Interfacing Guide](touchpad_RevB.pdf).
+Status:
+* Everything listed above is fully implemented.
+* No rigorous testing has been done.
+* Some basic error handling is done.
+* I have no problem using it as a daily drive.
+* Housing is not done yet. I want to use a USB-C connector. My dev board is micro USB. I need to either get a USB-C dev board (such as Elite-C) or a USB-C breakout PCB.
+
+Most laptop touchpads are made by Synaptics. They usually use a PS/2 interface. By default (i.e. without any special drivers), they can usually simulate a regular PS/2 mouse. I.e. they can report finger movements and button clicks. But that's about it. They don't support more sophisticated gestures we normally find on laptops. To achieve those gestures, we need to implement proprietary but published (with some caveats) Synaptics protocols, documented in [Synaptics PS/2 TouchPad Interfacing Guide](touchpad_RevB.pdf).
 
 ## Touchpad info
-
 * Pulled from an HP Envy Sleekbook 6
 * Synaptics chip # T1320A
 * Physical pinout, reverse engineered after watching this [YouTube video](https://www.youtube.com/watch?v=XdznW0ZuzGo&t=381s)
@@ -89,8 +95,11 @@ More info obtained from programatic querys, based on section 4.4. Information qu
   - min y: 553
   - Note: the min and max coordinates are definitely wrong but again, it doesn't matter.
 
+## Development setup
+![Breadboard](IMG_0914.jpeg)
+
 ## Implementing PS/2 on an MCU
-So, I'm using an atmel mega32u4 to interface with the touchpad. Any Leonardo clone should work. The reason I picked this MCU is its native USB support. Another alternative is to use tinyusb library to bit bang USB protocol. It's probably pretty straight-forward too.
+So, I'm using an atmel mega32u4 to interface with the touchpad. Any Leonardo clone should work. The reason I picked this MCU is its native USB HID support. Another alternative is to use tinyusb library to bit bang USB protocol on supported MCUs. It's probably pretty straight-forward too.
 
 Basically, I implemented syncrhonous writing, synchronous reading, and asynchronous reading. Synchronous writing because async writing is difficult to use. However, given the async nature of PS/2 protocol, it makes sense to have async, interrupt based reading. I.e. bits are transferred via interrupts and stored in a buffer. I have also implemented synchronous reading as a means to read responses after each write.
 
@@ -107,72 +116,52 @@ ISR(PCINT0_vect) {
 }
 ```
 
-With the PS2 implemented, it's really straight-forward to interact the touchpad as a standard PS2 mouse. The code is in the main branch of this repo.
+With the PS/2 implemented, it's really straight-forward to interact the touchpad as a standard PS/w2 mouse. The code is [here](https://github.com/delingren/ps2_mouse).
 
-The rest of this doc focuses on the proprietary Synaptics expansion of the PS2 protocol.
+The rest of this doc focuses on the proprietary Synaptics expansion of the PS/2 protocol.
+
+## Data packets
+The touchpad sends 6-byte packets to the host. These packets contain information such as finger positions, pressure, width. This particular touchpad can detect 3 fingers. But it only reports the positions of two. When more than one finger is pressed, it reports the states of two fingers in alternating packets.
+
+Since the communication is inevitably noisy, packets could be lost or altered. And it's not very critical to catch each and every frame. Some packets have distinctive features (e.g. fixed bits at certain places) and can be used as synchronization and recovery packets. So if an unexpected packet is received, I keep discarding packets until I'm in sync again.
 
 ## State machine logic
-I am simulating the behaviour of a MacBook since that's what I'm used to. Most PC laptops behave the same too, with "tap to click" feature turned off. In the following text, whenever I say "two fingers", I mean two or more fingers. This pad does recognize more fingers but it does not report the position of the third one and beyond. So no useful info can be derived, unless I supported three finger swipe, which I currently don't.
-
-TODO:
-* Make it more stable with thumb clicks.
-* Horizontal scrolling. I think this is a standard USB HID feature and should be relatively easy to implement.
-* Three finger swipes as back or forward button.
-* Zooming with two fingers.
+I am simulating the behaviour of a MacBook since that's what I'm used to. Most PC laptops behave the same too, with "tap to click" feature turned off. In the following text, whenever I say "two fingers", I mean two or more fingers.
 
 For now, we only do tracking, scrolling, left and right buttons, where right button click is simulated with a two finger click, just like MacBook. Windows optionally supports this too, as long as the touchpad is multi-touch.
 
-The logic is quite complicated. I might need to give it a little more thought and simplify a little. For now, we have three main valid states, identified by two state variables, fingers and buttons. Fingers is the number of fingers on the pad. Buttons is a bitmap representing the states of left and right buttons.
+The logic is quite complicated. I might need to give it a little more thought and simplify a little. For now, we have three main valid states, identified by two state variables, finger count and button state. Finger count is the number of fingers on the pad. Button state is a bitmap representing the states of left and right buttons.
 
 ### Idle
-This is where no fingers are on the touchpad and no buttons are pressed. Conditions:
-* fingers == 0 && buttons == 0
-
-Transitions:
-* Button pressed && no fingers pressed: report the button state and remain in the idle state. Note that if you press the pad with a non captive object such as a pen, you would be able to press the button with a finger count of zero.
-* Button pressed && at least one finger pressed: report the button state and go to tracking.
-* One finger pressed: report the button state and go to tracking.
-* Two fingers pressed: report the button state go to scrolling.
+This is where no fingers are on the touchpad. Conditions:
+* finger count == 0
+Note that even when there's no fingers are pressed, the button could still be pressed, by a non captive object such as a pen.
 
 ### Tracking
-This is the state where we report the coordinate delta to the OS who will move the cursor accordingly. There are a couple of substates.
-
-Overall conditions:
-* fingers == 1 || (fingers == 2 && buttons != 0)
+This is the state where we report the coordinate delta to the OS who will move the cursor accordingly. There are a couple of substates. conditions:
+* finger count == 1 || finger count == 2 && button state != 0
 
 When one finger is pressed, we're tracking regardless if the button is pressed. When two fingers are pressed and the button is *not* pressed, we always scroll. But if two fingers are pressed and the button is also pressed, we also track. This is MacBook's behaviour, which is different from Windows, at least Windows 11 on an HP Envy x360.
 
-Conditions:
-* fingers == 1
-
-Transitions:
-* Second finger pressed without the button pressed: go to scrolling.
-* Second finger pressed and the button pressed: stay in tracking. This transition can happen if you use the second finger to press the button *quickly* such that the second finger and the button are reported in the same packet.
-* Finger released: go back to idle.
-* Button pressed: stay in tracking.
-* Button released: stay in tracking.
-
-Conditions:
-* fingers == 2 && buttons != 0
-
-Transitions:
-* Button released: go to scrolling. Note that this behaviour is different on Windows.
-* One finger released: stay in tracking.
-* Button *and* one finger released: stay in tracking
-* Both fingers released: go to idle.
-
 ### Scrolling
 This is the state where two fingers are on the pad and their vertical movements are treated as scrolling. Conditions:
-* fingers == 2 || buttons == 0
+* finger count == 2 || button state == 0
 
-Transitions:
-* Button pressed: go to tracking
-* One finger released: go to tracking
-* Both fingers released: go to idle
+## Optimizations
 
-### Invalid state
-Conditions:
-* fingers == 0 && buttons != 0
+### Smoothing
+I found that if we faithfully report the finger positions in each frame, the cursor wobbles a lot, due to inherent noise and instability of human fingers. To mitigate, a few mechanisms are implemented:
 
-## Final product:
-![Breadboard](IMG_0914.jpeg)
+* Threshold. If the delta between two frames is below a threshold, we assume it's not intentional. The number is emperical and I fine tuned it a few iterations to a place where I'm happy with false positives and false negatives.
+* Averaging. Instead of reporting the position of each frame, I keep track of the average of last 5 frames, to remove sudden movements.
+
+### Precision Scrolling
+Scrolling seems to have much less granularity. The HID report uses an integer. I find it quite jerky to even report an amount of 1 in each frame. The reason is the frame rate is too high.
+
+So, I decided to have two scrolling intentions: precision scrolling and fast scrolling. When the finger movements are slow and small, I only generate a report every few frames, and the movement is only 1. Once the speed has passed a certain threshold, I assume the user's intention is to quickly scroll over a big area. In this case, I report each frame and the amount is proportional to the actual movement.
+
+## TODOs
+* Make it more stable with thumb clicks. I'm still a little unhappy when I use the thumb to press the button and another finger to move the cursor. I use this a lot to select text. The thumb position is not very stable although my intention is to keep it still. This can probably be improved by checking the width of the finger, which is reported. A fat finger probably should be given more leeway when it comes to determining the movements.
+* Horizontal scrolling. I think this is a standard USB HID feature and should be relatively easy to implement. I need to check the USB HID spec, which is very dry to read.
+* Three finger swipes as back or forward button. USB HID supports at least 5 buttons so this should be doable.
+* Zooming with two fingers. I'm not sure if this is doable.

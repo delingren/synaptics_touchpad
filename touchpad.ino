@@ -30,7 +30,7 @@ const float scale_scroll = 0.02;
 const int movement_threshold = 4;
 const int closeness_threshold = 15;
 const int smoothness_threshold = 200;
-const int slow_scroll_tipover = 8;
+const int slow_scroll_tipover = 7;
 const int slow_scroll_threshold = 125;
 
 #ifndef min
@@ -146,18 +146,6 @@ void parse_normal_packet(uint64_t packet, int w) {
     fingers = 3;
   }
 
-  if (fingers == 0 && z == 0 && !button) {
-    // After all fingers and the button are released, the touchpad keep
-    // reporting for 1 second. But we only need to report it once and ignore
-    // the rest of the packets.
-    if (button_state != 0 || finger_count != 0) {
-      button_state = 0;
-      finger_count = 0;
-      hid::report(0, 0, 0, 0);
-    }
-    return;
-  }
-
   if (fingers > finger_count) {
     // A finger has been added. Reset the secondary finger state.
     finger_states[1].x.reset();
@@ -235,9 +223,9 @@ void parse_normal_packet(uint64_t packet, int w) {
   finger_count = fingers;
 
   // Determine state.
-  if (finger_count == 0 && button_state == 0) {
+  if (finger_count == 0) {
     // idle
-    if (button) {
+    if (button_state == 0 && button) {
       button_state = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
     }
     hid::report(button_state, 0, 0, 0);
