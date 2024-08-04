@@ -58,8 +58,7 @@ More info obtained from programatic querys, based on section 4.4. Information qu
 * Query 0x08 (Read Resolutions): 2F 80 42
   - x units per mm: 47
   - y units per mm: 66
-  - Note: these numbers don't seem accurate. But they are not really important.
-
+  
 * Query 0x09 (Extended Model ID): 84 03 00
   - Light control: no
   - Peak detect: no
@@ -87,13 +86,12 @@ More info obtained from programatic querys, based on section 4.4. Information qu
   - ClickPad: One-button ClickPad
 
 * Query 0x0D (Maximum Coordinates): B1 6B 94
-  - max x: 2843 
-  - max y: 2374
+  - max x: 5686 
+  - max y: 4748
 
 * Query 0x0F (Minimum Coordinates): 27 94 22
-  - min x: 628
-  - min y: 553
-  - Note: the min and max coordinates are definitely wrong but again, it doesn't matter.
+  - min x: 1256
+  - min y: 1106
 
 ## Development setup
 ![Breadboard](IMG_0914.jpeg)
