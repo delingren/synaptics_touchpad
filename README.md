@@ -25,7 +25,7 @@ Most laptop touchpads are made by Synaptics. They usually use a PS/2 interface. 
 * Physical pinout, reverse engineered after watching this [YouTube video](https://www.youtube.com/watch?v=XdznW0ZuzGo&t=381s)
 ![Pinout](IMG_0835.jpeg)
 
-More info obtained from programatic querys, based on section 4.4. Information queries.
+More info obtained from programatic queries, based on section 4.4. Information queries.
 
 * Query 0x00 (Identify TouchPad): 01 47 18. 
   - Version 8.1
