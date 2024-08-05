@@ -114,7 +114,7 @@ ISR(PCINT0_vect) {
 }
 ```
 
-With the PS/2 implemented, it's really straight-forward to interact the touchpad as a standard PS/w2 mouse. The code is [here](https://github.com/delingren/ps2_mouse).
+With the PS/2 protocol implemented, it's really straight-forward to interact the touchpad as a standard PS/2 mouse. The code is [here](https://github.com/delingren/ps2_mouse).
 
 The rest of this doc focuses on the proprietary Synaptics expansion of the PS/2 protocol.
 
