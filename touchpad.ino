@@ -29,7 +29,10 @@
 // fine turning them.
 
 // When finger is held *still*, the maximum flucation from frame to frame in mm.
-const float noise_threshold_mm = 0.12;
+const float noise_threshold_tracking_mm = 0.15;
+
+const float noise_threshold_scrolling_mm = 0.09;
+
 // HID units per mm, when tracking.
 const float scale_tracking_mm = 18.0;
 // HID units per mm, when scrolling.
@@ -47,7 +50,10 @@ float scale_tracking_x, scale_tracking_y;
 // UID units per raw unit, when scrolling.
 float scale_scroll;
 // Max fluctuation from frame to frame in raw units.
-float noise_threshold_x, noise_threshold_y;
+float noise_threshold_tracking_x, noise_threshold_tracking_y;
+
+float noise_threshold_scrolling_y;
+
 // Max distance from frame to frame in raw units.
 float max_delta_x, max_delta_y;
 // Cutoff speed between slow and fast scrolling, in raw units per frame.
@@ -216,7 +222,6 @@ void parse_primary_packet(uint64_t packet, int w) {
       // slightly jerky cursor movement.
       if (abs(x - finger_states[0].x.average()) >= proximity_threshold_x ||
           abs(y - finger_states[0].y.average()) >= proximity_threshold_y) {
-        Serial.println("Possible finger swap");
         if (abs(x - finger_states[1].x.average()) < proximity_threshold_x &&
             abs(y - finger_states[1].y.average()) < proximity_threshold_y) {
           finger_states[0] = finger_states[1];
@@ -258,6 +263,8 @@ void parse_primary_packet(uint64_t packet, int w) {
     // idle
     if (button_state == 0 && button) {
       button_state = new_finger_count < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
+    } else if (!button) {
+      button_state = 0;
     }
     hid::report(button_state, 0, 0, 0);
     return;
@@ -275,7 +282,7 @@ void parse_primary_packet(uint64_t packet, int w) {
     // Since we're scrolling, we are here every other frame. So we should double
     // the noise threshold.
     int scroll_amount =
-        to_hid_value(delta_y, noise_threshold_y * 2, scale_scroll);
+        to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
     if (abs(delta_y) <= slow_scroll_threshold) {
       if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
         slow_scroll_frame_count = 0;
@@ -312,9 +319,11 @@ void parse_primary_packet(uint64_t packet, int w) {
     // packets are alternated. So we should double the threshold.
     hid::report(
         button_state,
-        to_hid_value(delta_x, noise_threshold_x * finger_count == 1 ? 1 : 2,
+        to_hid_value(delta_x,
+                     noise_threshold_tracking_x * finger_count == 1 ? 1 : 2,
                      scale_tracking_x),
-        -to_hid_value(delta_y, noise_threshold_y * finger_count == 1 ? 1 : 2,
+        -to_hid_value(delta_y,
+                      noise_threshold_tracking_y * finger_count == 1 ? 1 : 2,
                       scale_tracking_y),
         0);
     return;
@@ -365,7 +374,7 @@ void parse_extended_packet(uint64_t packet) {
       // Since we are parsing secondary packets, we are here every other frame,
       // so we should double the noise threshold.
       int scroll_amount =
-          to_hid_value(delta_y, noise_threshold_y * 2, scale_scroll);
+          to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
       if (abs(delta_y) <= slow_scroll_threshold) {
         if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
           slow_scroll_frame_count = 0;
@@ -378,10 +387,12 @@ void parse_extended_packet(uint64_t packet) {
       }
       hid::report(button_state, 0, 0, scroll_amount);
     } else {
-      hid::report(
-          button_state,
-          to_hid_value(delta_x, noise_threshold_x * 2, scale_tracking_x),
-          -to_hid_value(delta_y, noise_threshold_y * 2, scale_tracking_y), 0);
+      hid::report(button_state,
+                  to_hid_value(delta_x, noise_threshold_tracking_x * 2,
+                               scale_tracking_x),
+                  -to_hid_value(delta_y, noise_threshold_tracking_y * 2,
+                                scale_tracking_y),
+                  0);
     }
   } else {
     Serial.println("Finger count packet");
@@ -402,8 +413,12 @@ void setup() {
   scale_tracking_x = scale_tracking_mm / synaptics::units_per_mm_x;
   scale_tracking_y = scale_tracking_mm / synaptics::units_per_mm_y;
   scale_scroll = scale_scroll_mm / synaptics::units_per_mm_y;
-  noise_threshold_x = noise_threshold_mm * synaptics::units_per_mm_x;
-  noise_threshold_y = noise_threshold_mm * synaptics::units_per_mm_y;
+  noise_threshold_tracking_x =
+      noise_threshold_tracking_mm * synaptics::units_per_mm_x;
+  noise_threshold_tracking_y =
+      noise_threshold_tracking_mm * synaptics::units_per_mm_y;
+  noise_threshold_scrolling_y =
+      noise_threshold_scrolling_mm * synaptics::units_per_mm_y;
   max_delta_x = max_delta_mm * synaptics::units_per_mm_x;
   max_delta_y = max_delta_mm * synaptics::units_per_mm_y;
   slow_scroll_threshold = slow_scroll_threshold_mm * synaptics::units_per_mm_y;
