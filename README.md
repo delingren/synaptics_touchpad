@@ -151,7 +151,7 @@ This is the state where two fingers are on the pad and their vertical movements 
 I found that if we faithfully report the finger positions in each frame, the cursor wobbles a lot, due to inherent noise and instability of human fingers. To mitigate, a few mechanisms are implemented:
 
 * Threshold. If the delta between two frames is below a threshold, we assume it's not intentional. The number is emperical and I fine tuned it a few iterations to a place where I'm happy with false positives and false negatives.
-* Averaging. Instead of reporting the position of each frame, I keep track of the average of last 5 frames, to remove sudden movements.
+* Averaging. Instead of reporting the position of each frame, I keep track of the average of last 5 frames, to remove sudden movements. I copied some of the logic from [VoodooPS2 driver](https://github.com/acidanthera/VoodooPS2/blob/master/VoodooPS2Trackpad/VoodooPS2TrackpadCommon.h).
 
 ### Precision Scrolling
 Scrolling seems to have much less granularity. The HID report uses an integer. I find it quite jerky to even report an amount of 1 in each frame. The reason is the frame rate is too high.
