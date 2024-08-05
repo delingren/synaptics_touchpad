@@ -24,17 +24,41 @@
 #include "src/ps2.h"
 #include "src/synaptics.h"
 
-const float scale_tracking = 18;  // mm to HID unit
-const float scale_scroll = 1.4;   // mm to HID unit
+// All the following consts are empirical and may vary from person to person and
+// from device to device. These values are a good place to start. I may keep
+// fine turning them.
 
-const float movement_threshold = 0.15;  // mm
+// When finger is held *still*, the maximum flucation from frame to frame in mm.
+const float noise_threshold_mm = 0.12;
+// HID units per mm, when tracking.
+const float scale_tracking_mm = 18.0;
+// HID units per mm, when scrolling.
+const float scale_scroll_mm = 1.6;
+// Cutoff speed between slow and fast scrolling, in mm per frame.
+const float slow_scroll_threshold_mm = 2.0;
+// Max distance between two frames.
+const float max_delta_mm = 3;
+// The delta in either direction within which is considered normal movements
+// between frames while scrolling at a moderate speed.
+const int proximity_threshold_mm = 15;
 
-const float closeness_threshold =
-    0.35;  // mm, biggest change in either direction in one frame.
-const float smoothness_threshold =
-    4.5;  // mm, smallest difference in either direction between two fingers
-const int slow_scroll_tipover = 7;
-const float slow_scroll_threshold = 2.0;  // mm
+// HID units per raw unit, when tracking.
+float scale_tracking_x, scale_tracking_y;
+// UID units per raw unit, when scrolling.
+float scale_scroll;
+// Max fluctuation from frame to frame in raw units.
+float noise_threshold_x, noise_threshold_y;
+// Max distance from frame to frame in raw units.
+float max_delta_x, max_delta_y;
+// Cutoff speed between slow and fast scrolling, in raw units per frame.
+float slow_scroll_threshold;
+// The number of frames after which we send a scroll to the host in slow
+// scrolling mode. Technically the frame number is twice this number since
+// we're receiving alternating primary and secondary packets.
+const int slow_scroll_frames_per_detent = 7;
+// The delta within which is considered normal movements between frames while
+// scrolling at a moderate speed.
+float proximity_threshold_x, proximity_threshold_y;
 
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -44,7 +68,9 @@ const float slow_scroll_threshold = 2.0;  // mm
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
+#ifndef sign
 #define sign(x) ((x) > 0 ? (1) : ((x) < 0 ? (-1) : (0)))
+#endif
 
 struct finger_state {
   SimpleAverage<int, 5> x;
@@ -104,14 +130,14 @@ void process_pending_packet() {
       parse_extended_packet(data);
       return;
     default:
-      parse_normal_packet(data, w);
+      parse_primary_packet(data, w);
       return;
   }
 }
 
-int8_t to_hid_value(float value, float scale_factor) {
+int8_t to_hid_value(float value, float threshold, float scale_factor) {
   const int8_t hid_max = 127;
-  if (abs(value) < movement_threshold) {
+  if (abs(value) < threshold) {
     return 0;
   }
   return sign(value) * min(max(abs(value) * scale_factor, 1), hid_max);
@@ -122,11 +148,11 @@ int8_t to_hid_value(float value, float scale_factor) {
 static finger_state finger_states[2];
 static short finger_count = 0;
 static uint8_t button_state = 0;  // bit 0: L, bit 1: R
-static uint8_t slow_scroll_count = 0;
+static uint8_t slow_scroll_frame_count = 0;
 const uint8_t LEFT_BUTTON = 0x01;
 const uint8_t RIGHT_BUTTON = 0x02;
 
-void parse_normal_packet(uint64_t packet, int w) {
+void parse_primary_packet(uint64_t packet, int w) {
   // Reference: Section 3.2.1, Figure 3-4
   int x = (packet >> 32) & 0x00FF | (packet >> 0) & 0x0F00 |
           (packet >> 16) & 0x1000;
@@ -138,18 +164,18 @@ void parse_normal_packet(uint64_t packet, int w) {
   // change completely if the touchpad is not a clickpad (i.e. it has physical
   // buttons).
   bool button = (packet >> 24) & 0x01;
-  int fingers = 0;
+  int new_finger_count = 0;
   if (z == 0) {
-    fingers = 0;
+    new_finger_count = 0;
   } else if (w >= 4) {
-    fingers = 1;
+    new_finger_count = 1;
   } else if (w == 0) {
-    fingers = 2;
+    new_finger_count = 2;
   } else if (w == 1) {
-    fingers = 3;
+    new_finger_count = 3;
   }
 
-  if (fingers > finger_count) {
+  if (new_finger_count > finger_count) {
     // A finger has been added. Reset the secondary finger state.
     finger_states[1].x.reset();
     finger_states[1].y.reset();
@@ -159,27 +185,45 @@ void parse_normal_packet(uint64_t packet, int w) {
     }
   }
 
-  if (fingers < finger_count) {
+  int delta_x = 0, delta_y = 0;
+
+  // Update state variables.
+  if (new_finger_count > 0) {
+    finger_states[0].z = z;
+
+    int prev_x = finger_states[0].x.average();
+    int new_x = finger_states[0].x.filter(x);
+    if (prev_x > 0 && new_finger_count == finger_count) {
+      delta_x = new_x - prev_x;
+    }
+
+    int prev_y = finger_states[0].y.average();
+    int new_y = finger_states[0].y.filter(y);
+    if (prev_y > 0 && new_finger_count == finger_count) {
+      delta_y = new_y - prev_y;
+    }
+  }
+
+  if (new_finger_count < finger_count) {
     // A finger has been released.
-    if (fingers == 1) {
+    if (finger_count == 2) {
       // 2 fingers -> 1 finger
       // When a primary finger is released, the secondary becomes the primary.
-      // We determine if that is happening be checking if the finger location is
+      // We determine if that is happening by checking if the finger location is
       // close to the previous secondary finger. closeness_threshold is an
       // emperical number and not always reliable. We err on the conservative
       // side. If we can't be sure, just reset the state. This could result in a
       // slightly jerky cursor movement.
-      if (abs(x - finger_states[1].x.average()) <
-              closeness_threshold * synaptics::units_per_mm_x &&
-          abs(y - finger_states[1].y.average()) <
-              closeness_threshold * synaptics::units_per_mm_y) {
-        finger_states[0] = finger_states[1];
-      } else if (abs(x - finger_states[0].x.average()) >=
-                     closeness_threshold * synaptics::units_per_mm_x ||
-                 abs(y - finger_states[0].y.average()) >=
-                     closeness_threshold * synaptics::units_per_mm_y) {
-        finger_states[0].x.reset();
-        finger_states[0].y.reset();
+      if (abs(x - finger_states[0].x.average()) >= proximity_threshold_x ||
+          abs(y - finger_states[0].y.average()) >= proximity_threshold_y) {
+        Serial.println("Possible finger swap");
+        if (abs(x - finger_states[1].x.average()) < proximity_threshold_x &&
+            abs(y - finger_states[1].y.average()) < proximity_threshold_y) {
+          finger_states[0] = finger_states[1];
+        } else {
+          finger_states[0].x.reset();
+          finger_states[0].y.reset();
+        }
       }
     } else {
       // 3 fingers -> 2 fingers or 1 finger.
@@ -191,53 +235,29 @@ void parse_normal_packet(uint64_t packet, int w) {
     }
   }
 
-  if (finger_count > 1 && fingers == 1) {
-    // When a primary finger is released, the secondary becomes the primary.
-    // We determine if that is happening be checking if the finger location is
-    // close to the previous secondary finger. closeness_threshold is an
-    // emperical number and not always reliable. We err on the conservative
-    // side. If we can't be sure, just reset the state. This could result in a
-    // slightly jerky cursor movement.
-    if (abs(x - finger_states[1].x.average()) <
-            closeness_threshold * synaptics::units_per_mm_x &&
-        abs(y - finger_states[1].y.average()) <
-            closeness_threshold * synaptics::units_per_mm_y) {
-      finger_states[0] = finger_states[1];
-    } else if (abs(x - finger_states[0].x.average()) >=
-                   closeness_threshold * synaptics::units_per_mm_x ||
-               abs(y - finger_states[0].y.average()) >=
-                   closeness_threshold * synaptics::units_per_mm_y) {
-      finger_states[0].x.reset();
-      finger_states[0].y.reset();
-    }
+  if (finger_count == 1 && new_finger_count == 1 &&
+      (abs(delta_x) >= max_delta_x || abs(delta_y) >= max_delta_y)) {
+    // In rare occasions where a finger is released and another is pressed in
+    // the same frame, we don't see a finger count change but a big jump in
+    // finger position. In this case, reset the position and start over.
+    // This solution isn't ideal. A rather big jump could happen when the
+    // fingers are moving very fast. A more reliable approach would be based
+    // on the recent velocity of the finger movements. But it's complicated
+    // and expensive. Both scenarios just described are edge cases and the user
+    // is probably just fooling around.
+    finger_states[0].x.reset();
+    finger_states[0].y.reset();
+    delta_x = 0;
+    delta_y = 0;
   }
 
-  int delta_x = 0, delta_y = 0;
-
-  // Update state variables.
-  if (fingers > 0) {
-    finger_states[0].z = z;
-
-    int prev_x = finger_states[0].x.average();
-    int new_x = finger_states[0].x.filter(x);
-    if (prev_x > 0 && fingers == finger_count) {
-      delta_x = new_x - prev_x;
-    }
-
-    int prev_y = finger_states[0].y.average();
-    int new_y = finger_states[0].y.filter(y);
-    if (prev_y > 0 && fingers == finger_count) {
-      delta_y = new_y - prev_y;
-    }
-  }
-
-  finger_count = fingers;
+  finger_count = new_finger_count;
 
   // Determine state.
   if (finger_count == 0) {
     // idle
     if (button_state == 0 && button) {
-      button_state = fingers < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
+      button_state = new_finger_count < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
     }
     hid::report(button_state, 0, 0, 0);
     return;
@@ -247,32 +267,33 @@ void parse_normal_packet(uint64_t packet, int w) {
     // scrolling
     if (button) {
       // It's OK to change between left and right while scrolling.
-      button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
+      button_state = new_finger_count > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
     } else {
       button_state = 0;
     }
 
-    int scroll_amount = to_hid_value(
-        ((float)delta_y) / ((float)synaptics::units_per_mm_y), scale_scroll);
-    if (abs(delta_y) <= slow_scroll_threshold * synaptics::units_per_mm_y) {
-      if (++slow_scroll_count == slow_scroll_tipover) {
-        slow_scroll_count = 0;
+    // Since we're scrolling, we are here every other frame. So we should double
+    // the noise threshold.
+    int scroll_amount =
+        to_hid_value(delta_y, noise_threshold_y * 2, scale_scroll);
+    if (abs(delta_y) <= slow_scroll_threshold) {
+      if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
+        slow_scroll_frame_count = 0;
         scroll_amount = sign(scroll_amount);
       } else {
         scroll_amount = 0;
       }
     } else {
-      slow_scroll_count = 0;
+      slow_scroll_frame_count = 0;
     }
 
     hid::report(button_state, 0, 0, scroll_amount);
 
-    if (fingers < 2 || button != 0) {
+    if (new_finger_count < 2 || button != 0) {
       // We are going to leave scrolling state in the next frame. Reset slow
       // scroll count.
-      slow_scroll_count = 0;
+      slow_scroll_frame_count = 0;
     }
-
     return;
   }
 
@@ -282,17 +303,19 @@ void parse_normal_packet(uint64_t packet, int w) {
       // If the button is already pressed, we don't change between left and
       // right while dragging.
       if (button_state == 0) {
-        button_state = fingers > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
+        button_state = new_finger_count > 1 ? RIGHT_BUTTON : LEFT_BUTTON;
       }
     } else {
       button_state = 0;
     }
+    // If there are multiple fingers pressed, normal packets and secondary
+    // packets are alternated. So we should double the threshold.
     hid::report(
         button_state,
-        to_hid_value(((float)delta_x) / ((float)synaptics::units_per_mm_x),
-                     scale_tracking),
-        -to_hid_value(((float)delta_y) / ((float)synaptics::units_per_mm_y),
-                      scale_tracking),
+        to_hid_value(delta_x, noise_threshold_x * finger_count == 1 ? 1 : 2,
+                     scale_tracking_x),
+        -to_hid_value(delta_y, noise_threshold_y * finger_count == 1 ? 1 : 2,
+                      scale_tracking_y),
         0);
     return;
   }
@@ -320,8 +343,7 @@ void parse_extended_packet(uint64_t packet) {
     int new_y = finger_states[1].y.filter(y);
     int delta_y = prev_y == 0 ? 0 : new_y - prev_y;
 
-    if (abs(delta_x) >= smoothness_threshold * synaptics::units_per_mm_x ||
-        abs(delta_y) >= smoothness_threshold * synaptics::units_per_mm_y) {
+    if (abs(delta_x) >= max_delta_x || abs(delta_y) >= max_delta_y) {
       // Sometimes when a 2nd or 3rd finger is released, we receive a secondary
       // finger position before the finger count change. In this case, the new
       // secondary finger is not necessarily the same physical finger as
@@ -340,27 +362,26 @@ void parse_extended_packet(uint64_t packet) {
     finger_states[1].z = z;
 
     if (finger_count >= 2 && button_state == 0) {
-      int scroll_amount = to_hid_value(
-          ((float)delta_y) / ((float)synaptics::units_per_mm_y), scale_scroll);
-      if (abs(delta_y) <= slow_scroll_threshold * synaptics::units_per_mm_y) {
-        if (++slow_scroll_count == slow_scroll_tipover) {
-          slow_scroll_count = 0;
+      // Since we are parsing secondary packets, we are here every other frame,
+      // so we should double the noise threshold.
+      int scroll_amount =
+          to_hid_value(delta_y, noise_threshold_y * 2, scale_scroll);
+      if (abs(delta_y) <= slow_scroll_threshold) {
+        if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
+          slow_scroll_frame_count = 0;
           scroll_amount = sign(scroll_amount);
         } else {
           scroll_amount = 0;
         }
       } else {
-        slow_scroll_count = 0;
+        slow_scroll_frame_count = 0;
       }
       hid::report(button_state, 0, 0, scroll_amount);
     } else {
       hid::report(
           button_state,
-          to_hid_value(((float)delta_x) / ((float)synaptics::units_per_mm_x),
-                       scale_tracking),
-          -to_hid_value(((float)delta_y) / ((float)synaptics::units_per_mm_y),
-                        scale_tracking),
-          0);
+          to_hid_value(delta_x, noise_threshold_x * 2, scale_tracking_x),
+          -to_hid_value(delta_y, noise_threshold_y * 2, scale_tracking_y), 0);
     }
   } else {
     Serial.println("Finger count packet");
@@ -377,7 +398,17 @@ void setup() {
   ps2::begin(7, 8, byte_received);
   ps2::reset();
   synaptics::init();
-  Serial.println("Touchpad started.");
+
+  scale_tracking_x = scale_tracking_mm / synaptics::units_per_mm_x;
+  scale_tracking_y = scale_tracking_mm / synaptics::units_per_mm_y;
+  scale_scroll = scale_scroll_mm / synaptics::units_per_mm_y;
+  noise_threshold_x = noise_threshold_mm * synaptics::units_per_mm_x;
+  noise_threshold_y = noise_threshold_mm * synaptics::units_per_mm_y;
+  max_delta_x = max_delta_mm * synaptics::units_per_mm_x;
+  max_delta_y = max_delta_mm * synaptics::units_per_mm_y;
+  slow_scroll_threshold = slow_scroll_threshold_mm * synaptics::units_per_mm_y;
+  proximity_threshold_x = proximity_threshold_mm * synaptics::units_per_mm_x;
+  proximity_threshold_y = proximity_threshold_mm * synaptics::units_per_mm_y;
 }
 
 void loop() {
