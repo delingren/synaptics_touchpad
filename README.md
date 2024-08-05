@@ -35,7 +35,7 @@ More info obtained from programatic querys, based on section 4.4. Information qu
 
 * Query 0x02 (Read Capabilities): D0 01 23
    - Extended capability: yes 
-   - Extended queries:
+   - Extended queries: 13
    - Middle button: no
    - Model sub number: 01
    - Pass through: no
@@ -48,8 +48,8 @@ More info obtained from programatic querys, based on section 4.4. Information qu
    - Palm detect: yes
 
 * Query 0x03 (Read Model ID): 01 E2 B1
- - Absolute mode: yes
- - Geometry: rectangule
+  - Absolute mode: yes
+  - Geometry: rectangule
 
 * Query 0x06 (Read Serial Number Prefix): 00 00 00
 

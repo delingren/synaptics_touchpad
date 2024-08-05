@@ -4,9 +4,13 @@
 #include "ps2.h"
 
 namespace synaptics {
+extern int units_per_mm_x;
+extern int units_per_mm_y;
+extern uint8_t clickpad_type;
+
 void special_command(uint8_t command);
 void status_request(uint8_t arg, uint8_t *result);
-void set_mode();
+void init();
 }  // namespace synaptics
 
 template <class T, int N>
