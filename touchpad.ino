@@ -142,11 +142,11 @@ void process_pending_packet() {
 }
 
 int8_t to_hid_value(float value, float threshold, float scale_factor) {
-  const int8_t hid_max = 127;
+  const float hid_max = 127.0F;
   if (abs(value) < threshold) {
     return 0;
   }
-  return sign(value) * min(max(abs(value) * scale_factor, 1), hid_max);
+  return sign(value) * min(max(abs(value) * scale_factor, 1.0F), hid_max);
 }
 
 // State of primary and secondary fingers. We only keep track of two since this
@@ -317,15 +317,13 @@ void parse_primary_packet(uint64_t packet, int w) {
     }
     // If there are multiple fingers pressed, normal packets and secondary
     // packets are alternated. So we should double the threshold.
-    hid::report(
-        button_state,
-        to_hid_value(delta_x,
-                     noise_threshold_tracking_x * finger_count == 1 ? 1 : 2,
-                     scale_tracking_x),
-        -to_hid_value(delta_y,
-                      noise_threshold_tracking_y * finger_count == 1 ? 1 : 2,
-                      scale_tracking_y),
-        0);
+    float multiplier = finger_count == 1 ? 1.0 : 2.0;
+    hid::report(button_state,
+                to_hid_value(delta_x, noise_threshold_tracking_x * multiplier,
+                             scale_tracking_x),
+                -to_hid_value(delta_y, noise_threshold_tracking_y * multiplier,
+                              scale_tracking_y),
+                0);
     return;
   }
 }
@@ -388,9 +386,9 @@ void parse_extended_packet(uint64_t packet) {
       hid::report(button_state, 0, 0, scroll_amount);
     } else {
       hid::report(button_state,
-                  to_hid_value(delta_x, noise_threshold_tracking_x * 2,
+                  to_hid_value(delta_x, noise_threshold_tracking_x * 2.0F,
                                scale_tracking_x),
-                  -to_hid_value(delta_y, noise_threshold_tracking_y * 2,
+                  -to_hid_value(delta_y, noise_threshold_tracking_y * 2.0F,
                                 scale_tracking_y),
                   0);
     }
