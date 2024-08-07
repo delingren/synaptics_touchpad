@@ -150,16 +150,24 @@ This is the state where two fingers are on the pad and their vertical movements 
 ### Smoothing
 I found that if we faithfully report the finger positions in each frame, the cursor wobbles a lot, due to inherent noise and instability of human fingers. To mitigate, a few mechanisms are implemented:
 
-* Threshold. If the delta between two frames is below a threshold, we assume it's not intentional. The number is emperical and I fine tuned it a few iterations to a place where I'm happy with false positives and false negatives.
 * Averaging. Instead of reporting the position of each frame, I keep track of the average of last 5 frames, to remove sudden movements. I copied some of the logic from [VoodooPS2 driver](https://github.com/acidanthera/VoodooPS2/blob/master/VoodooPS2Trackpad/VoodooPS2TrackpadCommon.h).
+* Noise threshold. If the delta between two frames is below a threshold, we assume it's not intentional. The number is emperical and I fine tuned it a few iterations to a place where I'm happy with false positives and false negatives.
+* Snapping to the still position. When the finger has been saying still, we use a higher threshold, to make it a little "sticky" to start, but smoother once it's moving. 
+* Fat finger and heavy finger. When the finger pressure is high or the width is big, we increase the threshold too, asssuming the finger is less stable. I am still not happy with this optimization. It's still pretty wobbly. But if I increase the threshold too much, it becomes too insensitive. The other day, when I was using a ThinkPad X1, I noticed this behaviour: if the finger width becomes big while tracking, it completely freezes the movement of that finger, until it is lifted, even if the width goes down again. I might want to prototype this behaviour and see if it helps.
 
 ### Precision Scrolling
-Scrolling seems to have much less granularity. The HID report uses an integer. I find it quite jerky to even report an amount of 1 in each frame. The reason is the frame rate is too high.
+Scrolling seems to have much less granularity. The HID report uses an integer. I find it quite jumpy to even report an amount of 1 in each frame. The reason is the frame rate is too high. But we can't report a fraction of a unit in a frame.
 
 So, I decided to have two scrolling intentions: precision scrolling and fast scrolling. When the finger movements are slow and small, I only generate a report every few frames, and the movement is only 1. Once the speed has passed a certain threshold, I assume the user's intention is to quickly scroll over a big area. In this case, I report each frame and the amount is proportional to the actual movement.
 
+### Freezing before button press and after button release
+One thing I noticed is that the finger tends to be very unstable while pressing or releasing the button. So I try to freeze the finger movement (report a delta of 0) during these moments.
+* Releasing is relatively easy. I have a global frame count which increases by 1 each time a packet arrives. When the button is released, I remember the frame count. Then in the next few frames, I always report the position delta as 0.
+* Pressing is much trickier. By the time we realize a button has been pressed, the instability has already happened. In order to change frames retrospectively, I implemented a delayed reporting mechanism. Each time we want to send an HID report, we put it in a queue. And we send a report a few frames after it has been generated. We need to make this delay really small (just 3 or 4 frames) to be unnoticable.
+
 ## TODOs
-* Make it more stable with thumb clicks. I'm still a little unhappy when I use the thumb to press the button and another finger to move the cursor. I use this a lot to select text. The thumb position is not very stable although my intention is to keep it still. This can probably be improved by checking the width of the finger, which is reported. A fat finger probably should be given more leeway when it comes to determining the movements.
+* Make it more stable with thumb clicks. I'm still a little unhappy when I use the thumb to press the button and another finger to move the cursor. I use this a lot to select text. The thumb position is not very stable although my intention is to keep it still. This can probably be improved by checking the width of the finger, which is reported. A fat finger probably should be given more leeway when it comes to determining the movements. The idea I got from ThinkPad might be helpful here.
+* Make it more stable when lifting a finger. Lifting a finger tends to brush it over the touchpad and create an unwanted movement. Since we already have a delayed reporting in place, I think we can just go back and change the last few frames when we detect a finger lift.
 * Horizontal scrolling. I think this is a standard USB HID feature and should be relatively easy to implement. I need to check the USB HID spec, which is very dry to read.
 * Three finger swipes as back or forward button. USB HID supports at least 5 buttons so this should be doable.
 * Zooming with two fingers. I'm not sure if this is doable.
