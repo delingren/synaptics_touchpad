@@ -41,7 +41,7 @@
 // fine turning them.
 
 // When finger is held *still*, the maximum flucation from frame to frame in mm.
-const float noise_threshold_tracking_mm = 0.08;
+const float noise_threshold_tracking_mm = 0.04;
 const float noise_threshold_scrolling_mm = 0.09;
 
 // In order to retrospectively change the frames in the past, we delay reporting
@@ -203,6 +203,9 @@ void queue_report(uint8_t buttons, int8_t x, int8_t y, int8_t scroll) {
 }
 
 void parse_primary_packet(uint64_t packet, int w) {
+  // we only use 0 and 1 at this moment to indicate if the finger is moving
+  static unsigned int velocity = 0;
+
   // Reference: Section 3.2.1, Figure 3-4
   int x = (packet >> 32) & 0x00FF | (packet >> 0) & 0x0F00 |
           (packet >> 16) & 0x1000;
@@ -232,10 +235,11 @@ void parse_primary_packet(uint64_t packet, int w) {
   // When a button is pressed, we retrospectively freeze the previous frames.
   if (button && button_state == 0) {
     int size = reports.size();
+    Serial.print("Freezing previous frames ");
+    Serial.println(size);
     for (int i = 0; i < size; i++) {
       reports[i].x = 0;
       reports[i].y = 0;
-      reports[i].scroll = 0;
     }
   }
 
@@ -380,11 +384,22 @@ void parse_primary_packet(uint64_t packet, int w) {
     // If there are multiple fingers pressed, normal packets and secondary
     // packets are alternated. So we should double the threshold.
     float multiplier = finger_count == 1 ? 1.0 : 2.0;
+    if (velocity == 0) {
+      multiplier *= 1.5;
+    }
+
     int8_t delta_x_hid = to_hid_value(
         delta_x, noise_threshold_tracking_x * multiplier, scale_tracking_x);
     int8_t delta_y_hid = -to_hid_value(
         delta_y, noise_threshold_tracking_y * multiplier, scale_tracking_y);
     queue_report(button_state, delta_x_hid, delta_y_hid, 0);
+
+    if (delta_x_hid != 0 || delta_y_hid != 0) {
+      // TODO: more precisely calculate velocity
+      velocity = 1;
+    } else {
+      velocity = 0;
+    }
   }
 }
 
@@ -446,6 +461,7 @@ void parse_extended_packet(uint64_t packet) {
       }
       queue_report(button_state, 0, 0, scroll_amount);
     } else {
+      // TODO: use velocity here too, just like the primary frames
       int8_t delta_x_hid = to_hid_value(
           delta_x, noise_threshold_tracking_x * 2.0F, scale_tracking_x);
       int8_t delta_y_hid = -to_hid_value(
