@@ -106,8 +106,7 @@ RingBuffer<report, 32> reports;
 
 static unsigned long global_tick = 0;
 static unsigned long session_started_tick = 0;
-// TODO: use global tick for this as well.
-static uint8_t slow_scroll_tick = 0;
+static unsigned long slow_scroll_started_tick = 0;
 static unsigned long button_released_tick = 0;
 
 // State of primary and secondary fingers. We only keep track of two since this
@@ -338,14 +337,18 @@ void parse_primary_packet(uint64_t packet, int w) {
     int scroll_amount =
         to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
     if (abs(delta_y) <= slow_scroll_threshold) {
-      if (++slow_scroll_tick == slow_scroll_frames_per_detent) {
-        slow_scroll_tick = 0;
+      if (slow_scroll_started_tick == 0) {
+        slow_scroll_started_tick = global_tick - 1;
+      }
+      if ((global_tick - slow_scroll_started_tick) %
+              slow_scroll_frames_per_detent ==
+          0) {
         scroll_amount = sign(scroll_amount);
       } else {
         scroll_amount = 0;
       }
     } else {
-      slow_scroll_tick = 0;
+      slow_scroll_started_tick = 0;
     }
 
     queue_report(button_state, 0, 0, scroll_amount);
@@ -353,7 +356,7 @@ void parse_primary_packet(uint64_t packet, int w) {
     if (new_finger_count < 2 || button != 0) {
       // We are going to leave scrolling state in the next frame. Reset slow
       // scroll count.
-      slow_scroll_tick = 0;
+      slow_scroll_started_tick = 0;
     }
   } else if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
     // 1-finger tracking or 2-finger tracking
@@ -423,14 +426,15 @@ void parse_extended_packet(uint64_t packet) {
       int scroll_amount =
           to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
       if (abs(delta_y) <= slow_scroll_threshold) {
-        if (++slow_scroll_tick == slow_scroll_frames_per_detent) {
-          slow_scroll_tick = 0;
+        if ((global_tick - slow_scroll_started_tick) %
+              slow_scroll_frames_per_detent ==
+          0) {
           scroll_amount = sign(scroll_amount);
         } else {
           scroll_amount = 0;
         }
       } else {
-        slow_scroll_tick = 0;
+        slow_scroll_started_tick = 0;
       }
       queue_report(button_state, 0, 0, scroll_amount);
     } else {
