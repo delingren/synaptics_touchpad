@@ -29,7 +29,7 @@
 // fine turning them.
 
 // When finger is held *still*, the maximum flucation from frame to frame in mm.
-const float noise_threshold_tracking_mm = 0.15;
+const float noise_threshold_tracking_mm = 0.04;
 
 const float noise_threshold_scrolling_mm = 0.09;
 
@@ -84,6 +84,7 @@ struct finger_state {
   short z;
 };
 
+// TODO: implement a proper ring buffer
 volatile uint64_t pending_packet;
 volatile bool has_pending_packet = false;
 
@@ -155,6 +156,9 @@ static finger_state finger_states[2];
 static short finger_count = 0;
 static uint8_t button_state = 0;  // bit 0: L, bit 1: R
 static uint8_t slow_scroll_frame_count = 0;
+static uint8_t velocity = 0;
+static int count_down = 0;
+
 const uint8_t LEFT_BUTTON = 0x01;
 const uint8_t RIGHT_BUTTON = 0x02;
 
@@ -165,11 +169,27 @@ void parse_primary_packet(uint64_t packet, int w) {
   int y = (packet >> 40) & 0x00FF | (packet >> 4) & 0x0F00 |
           (packet >> 17) & 0x1000;
   short z = (packet >> 16) & 0xFF;
+  // w is width only if it >= 4. otherwise it encodes finger count
+  short width = max(w, 4);
 
   // A clickpad reprots its button as a middle/up button. This logic needs to
   // change completely if the touchpad is not a clickpad (i.e. it has physical
   // buttons).
   bool button = (packet >> 24) & 0x01;
+
+  if (button == 0 && button_state != 0) {
+    Serial.println("Button released");
+    count_down = 12;
+  } else {
+    if (count_down != 0) {
+      if (--count_down == 0) {
+        Serial.println("Count down ennded");
+      } else {
+        Serial.println(".");
+      }
+    }
+  }
+
   int new_finger_count = 0;
   if (z == 0) {
     new_finger_count = 0;
@@ -267,6 +287,7 @@ void parse_primary_packet(uint64_t packet, int w) {
       button_state = 0;
     }
     hid::report(button_state, 0, 0, 0);
+    velocity = 0;
     return;
   }
 
@@ -318,12 +339,36 @@ void parse_primary_packet(uint64_t packet, int w) {
     // If there are multiple fingers pressed, normal packets and secondary
     // packets are alternated. So we should double the threshold.
     float multiplier = finger_count == 1 ? 1.0 : 2.0;
-    hid::report(button_state,
-                to_hid_value(delta_x, noise_threshold_tracking_x * multiplier,
-                             scale_tracking_x),
-                -to_hid_value(delta_y, noise_threshold_tracking_y * multiplier,
-                              scale_tracking_y),
-                0);
+    if (velocity == 0) {
+      multiplier *= 1.25;
+    }
+    if (width > 4) {
+      // Serial.print("Fat finger ");
+      // Serial.println(width);
+      multiplier *= 1 + (width - 4) / 2;
+    }
+    if (z >= 60) {
+      // Serial.print("Heavy finger ");
+      // Serial.println(z);
+    }
+
+    int8_t delta_x_hid = to_hid_value(
+        delta_x, noise_threshold_tracking_x * multiplier, scale_tracking_x);
+    int8_t delta_y_hid = -to_hid_value(
+        delta_y, noise_threshold_tracking_y * multiplier, scale_tracking_y);
+
+    if (count_down == 0) {
+      hid::report(button_state, delta_x_hid, delta_y_hid, 0);
+    } else {
+      hid::report(button_state, 0, 0, 0);
+    }
+
+    if (delta_y_hid != 0) Serial.println(delta_y_hid);
+    if (delta_x_hid != 0 || delta_y_hid != 0) {
+      velocity = 1;
+    } else {
+      velocity = 0;
+    }
     return;
   }
 }
