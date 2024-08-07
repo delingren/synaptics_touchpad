@@ -14,6 +14,56 @@ void init();
 }  // namespace synaptics
 
 template <class T, int N>
+class RingBuffer {
+ private:
+  T m_buffer[N];
+  int m_size;
+  int m_front;
+  int m_back;
+
+ public:
+  inline RingBuffer() {
+    m_size = 0;
+    m_front = 0;
+    m_back = 0;
+  }
+
+  bool empty() const { return m_size == 0; }
+  int size() const { return m_size; }
+
+  T pop_front() {
+    T item = m_buffer[m_front];
+    m_front = (m_front + 1) % N;
+    if (m_size == 0) {
+      return T();
+    } else {
+      m_size--;
+      return item;
+    }
+  }
+
+  bool push_back(T item) {
+    if (m_size == N) {
+      return false;
+    }
+
+    m_buffer[m_back] = item;
+    m_back = (m_back + 1) % N;
+    m_size++;
+    return;
+  }
+
+  T operator[](int i) const {
+    if (i >= m_size) {
+      return T();
+    } else {
+      int index = (m_front + i) % N;
+      return m_buffer[index];
+    }
+  }
+};
+
+template <class T, int N>
 class SimpleAverage {
  private:
   T m_buffer[N];

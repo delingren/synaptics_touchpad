@@ -84,13 +84,7 @@ struct finger_state {
   short z;
 };
 
-volatile uint64_t pending_packet;
-volatile bool has_pending_packet = false;
-
-void packet_received(uint64_t data) {
-  has_pending_packet = true;
-  pending_packet = data;
-}
+RingBuffer<uint64_t, 10> packets;
 
 void byte_received(uint8_t data) {
   static uint64_t buffer = 0;
@@ -117,26 +111,24 @@ void byte_received(uint8_t data) {
   buffer |= ((uint64_t)data) << index;
   index += 8;
   if (index == 48) {
-    packet_received(buffer);
+    packets.push_back(buffer);
     index = 0;
     buffer = 0;
   }
 }
 
-void process_pending_packet() {
-  uint64_t data = pending_packet;
-  has_pending_packet = false;
-
-  uint8_t w = (data >> 26) & 0x01 | (data >> 1) & 0x2 | (data >> 2) & 0x0C;
+void process_pending_packet(uint64_t packet) {
+  uint8_t w =
+      (packet >> 26) & 0x01 | (packet >> 1) & 0x2 | (packet >> 2) & 0x0C;
 
   switch (w) {
     case 3:  // pass through
       return;
     case 2:  // extended w mode
-      parse_extended_packet(data);
+      parse_extended_packet(packet);
       return;
     default:
-      parse_primary_packet(data, w);
+      parse_primary_packet(packet, w);
       return;
   }
 }
@@ -425,7 +417,12 @@ void setup() {
 }
 
 void loop() {
-  if (has_pending_packet) {
-    process_pending_packet();
+  if (!packets.empty()) {
+    if (packets.size() > 1) {
+      Serial.println("Ring buffer has more than 1 packet");
+    }
+
+    uint64_t packet = packets.pop_front();
+    process_pending_packet(packet);
   }
 }
