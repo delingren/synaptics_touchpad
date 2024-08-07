@@ -24,14 +24,34 @@
 #include "src/ps2.h"
 #include "src/synaptics.h"
 
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef max
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+#ifndef sign
+#define sign(x) ((x) > 0 ? (1) : ((x) < 0 ? (-1) : (0)))
+#endif
+
 // All the following consts are empirical and may vary from person to person and
 // from device to device. These values are a good place to start. I may keep
 // fine turning them.
 
 // When finger is held *still*, the maximum flucation from frame to frame in mm.
-const float noise_threshold_tracking_mm = 0.15;
-
+const float noise_threshold_tracking_mm = 0.08;
 const float noise_threshold_scrolling_mm = 0.09;
+
+// In order to retrospectively change the frames in the past, we delay reporting
+// for a few frames. This needs to be short enough that it's not perceptible.
+const int frames_delay = 6;
+// After the button is released, we freeze for a few frames since the finger is
+// likely going to be very unstable. Since it's very hard to release the button
+// and start moving immediately, it's OK to keep this frozen period relatively
+// long.
+const int frames_stablization = 15;
 
 // HID units per mm, when tracking.
 const float scale_tracking_mm = 18.0;
@@ -66,25 +86,38 @@ const int slow_scroll_frames_per_detent = 7;
 // scrolling at a moderate speed.
 float proximity_threshold_x, proximity_threshold_y;
 
-#ifndef min
-#define min(a, b) ((a) < (b) ? (a) : (b))
-#endif
-
-#ifndef max
-#define max(a, b) ((a) > (b) ? (a) : (b))
-#endif
-
-#ifndef sign
-#define sign(x) ((x) > 0 ? (1) : ((x) < 0 ? (-1) : (0)))
-#endif
-
 struct finger_state {
   SimpleAverage<int, 5> x;
   SimpleAverage<int, 5> y;
   short z;
 };
 
-RingBuffer<uint64_t, 10> packets;
+struct report {
+  uint8_t buttons;
+  int8_t x;
+  int8_t y;
+  int8_t scroll;
+};
+
+// In reality we don't really need a ring buffer for packets. A 16MHz ATMega32U4
+// can easily handle 80 frames per second without skipping frames.
+RingBuffer<uint64_t, 4> packets;
+RingBuffer<report, 32> reports;
+
+static unsigned long global_tick = 0;
+static unsigned long session_started_tick = 0;
+// TODO: use global tick for this as well.
+static uint8_t slow_scroll_tick = 0;
+static unsigned long button_released_tick = 0;
+
+// State of primary and secondary fingers. We only keep track of two since this
+// touchpad doesn't report the position of the 3rd and doesn't register the 4th.
+static finger_state finger_states[2];
+static short finger_count = 0;
+static uint8_t button_state = 0;  // bit 0: L, bit 1: R
+
+const uint8_t LEFT_BUTTON = 0x01;
+const uint8_t RIGHT_BUTTON = 0x02;
 
 void byte_received(uint8_t data) {
   static uint64_t buffer = 0;
@@ -118,8 +151,17 @@ void byte_received(uint8_t data) {
 }
 
 void process_pending_packet(uint64_t packet) {
+  global_tick++;
   uint8_t w =
       (packet >> 26) & 0x01 | (packet >> 1) & 0x2 | (packet >> 2) & 0x0C;
+
+  // Disable reporting during the first few frames of a session.
+  if (global_tick - session_started_tick >= frames_delay) {
+    if (!reports.empty()) {
+      report item = reports.pop_front();
+      hid::report(item.buttons, item.x, item.y, item.scroll);
+    }
+  }
 
   switch (w) {
     case 3:  // pass through
@@ -141,14 +183,17 @@ int8_t to_hid_value(float value, float threshold, float scale_factor) {
   return sign(value) * min(max(abs(value) * scale_factor, 1.0F), hid_max);
 }
 
-// State of primary and secondary fingers. We only keep track of two since this
-// touchpad doesn't report the position of the 3rd and doesn't register the 4th.
-static finger_state finger_states[2];
-static short finger_count = 0;
-static uint8_t button_state = 0;  // bit 0: L, bit 1: R
-static uint8_t slow_scroll_frame_count = 0;
-const uint8_t LEFT_BUTTON = 0x01;
-const uint8_t RIGHT_BUTTON = 0x02;
+void queue_report(uint8_t buttons, int8_t x, int8_t y, int8_t scroll) {
+  report item = {.buttons = buttons, .x = x, .y = y, .scroll = scroll};
+  if (button_released_tick != 0 &&
+      global_tick - button_released_tick < frames_stablization) {
+    // When a button is released, we freeze the next few frames.
+    item.x = 0;
+    item.y = 0;
+    item.scroll = 0;
+  }
+  reports.push_back(item);
+}
 
 void parse_primary_packet(uint64_t packet, int w) {
   // Reference: Section 3.2.1, Figure 3-4
@@ -173,6 +218,26 @@ void parse_primary_packet(uint64_t packet, int w) {
     new_finger_count = 3;
   }
 
+  if (finger_count == 0 && new_finger_count > 0) {
+    session_started_tick = global_tick;
+  }
+
+  // When a button is pressed, we retrospectively freeze the previous frames.
+  if (button && button_state == 0) {
+    int size = reports.size();
+    for (int i = 0; i < size; i++) {
+      reports[i].x = 0;
+      reports[i].y = 0;
+      reports[i].scroll = 0;
+    }
+  }
+
+  // When a button is released, we freeze the next few frames.
+  if (!button && button_state != 0) {
+    button_released_tick = global_tick;
+  }
+
+  // Update state variables.
   if (new_finger_count > finger_count) {
     // A finger has been added. Reset the secondary finger state.
     finger_states[1].x.reset();
@@ -185,7 +250,6 @@ void parse_primary_packet(uint64_t packet, int w) {
 
   int delta_x = 0, delta_y = 0;
 
-  // Update state variables.
   if (new_finger_count > 0) {
     finger_states[0].z = z;
 
@@ -255,14 +319,12 @@ void parse_primary_packet(uint64_t packet, int w) {
     // idle
     if (button_state == 0 && button) {
       button_state = new_finger_count < 2 ? LEFT_BUTTON : RIGHT_BUTTON;
-    } else if (!button) {
+      queue_report(button_state, 0, 0, 0);
+    } else if (button_state != 0 && !button) {
       button_state = 0;
+      queue_report(button_state, 0, 0, 0);
     }
-    hid::report(button_state, 0, 0, 0);
-    return;
-  }
-
-  if (finger_count >= 2 && button_state == 0) {
+  } else if (finger_count >= 2 && button_state == 0) {
     // scrolling
     if (button) {
       // It's OK to change between left and right while scrolling.
@@ -276,27 +338,24 @@ void parse_primary_packet(uint64_t packet, int w) {
     int scroll_amount =
         to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
     if (abs(delta_y) <= slow_scroll_threshold) {
-      if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
-        slow_scroll_frame_count = 0;
+      if (++slow_scroll_tick == slow_scroll_frames_per_detent) {
+        slow_scroll_tick = 0;
         scroll_amount = sign(scroll_amount);
       } else {
         scroll_amount = 0;
       }
     } else {
-      slow_scroll_frame_count = 0;
+      slow_scroll_tick = 0;
     }
 
-    hid::report(button_state, 0, 0, scroll_amount);
+    queue_report(button_state, 0, 0, scroll_amount);
 
     if (new_finger_count < 2 || button != 0) {
       // We are going to leave scrolling state in the next frame. Reset slow
       // scroll count.
-      slow_scroll_frame_count = 0;
+      slow_scroll_tick = 0;
     }
-    return;
-  }
-
-  if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
+  } else if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
     // 1-finger tracking or 2-finger tracking
     if (button) {
       // If the button is already pressed, we don't change between left and
@@ -310,13 +369,11 @@ void parse_primary_packet(uint64_t packet, int w) {
     // If there are multiple fingers pressed, normal packets and secondary
     // packets are alternated. So we should double the threshold.
     float multiplier = finger_count == 1 ? 1.0 : 2.0;
-    hid::report(button_state,
-                to_hid_value(delta_x, noise_threshold_tracking_x * multiplier,
-                             scale_tracking_x),
-                -to_hid_value(delta_y, noise_threshold_tracking_y * multiplier,
-                              scale_tracking_y),
-                0);
-    return;
+    int8_t delta_x_hid = to_hid_value(
+        delta_x, noise_threshold_tracking_x * multiplier, scale_tracking_x);
+    int8_t delta_y_hid = -to_hid_value(
+        delta_y, noise_threshold_tracking_y * multiplier, scale_tracking_y);
+    queue_report(button_state, delta_x_hid, delta_y_hid, 0);
   }
 }
 
@@ -366,26 +423,23 @@ void parse_extended_packet(uint64_t packet) {
       int scroll_amount =
           to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
       if (abs(delta_y) <= slow_scroll_threshold) {
-        if (++slow_scroll_frame_count == slow_scroll_frames_per_detent) {
-          slow_scroll_frame_count = 0;
+        if (++slow_scroll_tick == slow_scroll_frames_per_detent) {
+          slow_scroll_tick = 0;
           scroll_amount = sign(scroll_amount);
         } else {
           scroll_amount = 0;
         }
       } else {
-        slow_scroll_frame_count = 0;
+        slow_scroll_tick = 0;
       }
-      hid::report(button_state, 0, 0, scroll_amount);
+      queue_report(button_state, 0, 0, scroll_amount);
     } else {
-      hid::report(button_state,
-                  to_hid_value(delta_x, noise_threshold_tracking_x * 2.0F,
-                               scale_tracking_x),
-                  -to_hid_value(delta_y, noise_threshold_tracking_y * 2.0F,
-                                scale_tracking_y),
-                  0);
+      int8_t delta_x_hid = to_hid_value(
+          delta_x, noise_threshold_tracking_x * 2.0F, scale_tracking_x);
+      int8_t delta_y_hid = -to_hid_value(
+          delta_y, noise_threshold_tracking_y * 2.0F, scale_tracking_y);
+      queue_report(button_state, delta_x_hid, delta_y_hid, 0);
     }
-  } else {
-    Serial.println("Finger count packet");
   }
 }
 
@@ -418,10 +472,6 @@ void setup() {
 
 void loop() {
   if (!packets.empty()) {
-    if (packets.size() > 1) {
-      Serial.println("Ring buffer has more than 1 packet");
-    }
-
     uint64_t packet = packets.pop_front();
     process_pending_packet(packet);
   }

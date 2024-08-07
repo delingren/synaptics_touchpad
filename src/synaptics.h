@@ -9,7 +9,7 @@ extern int units_per_mm_y;
 extern uint8_t clickpad_type;
 
 void special_command(uint8_t command);
-void status_request(uint8_t arg, uint8_t *result);
+void status_request(uint8_t arg, uint8_t* result);
 void init();
 }  // namespace synaptics
 
@@ -53,13 +53,9 @@ class RingBuffer {
     return;
   }
 
-  T operator[](int i) const {
-    if (i >= m_size) {
-      return T();
-    } else {
-      int index = (m_front + i) % N;
-      return m_buffer[index];
-    }
+  T& operator[](int i) {
+    int index = (m_front + i) % N;
+    return m_buffer[index];
   }
 };
 
