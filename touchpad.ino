@@ -195,6 +195,8 @@ void queue_report(uint8_t buttons, int8_t x, int8_t y, int8_t scroll) {
   if (button_released_tick != 0 &&
       global_tick - button_released_tick < frames_stablization) {
     // When a button is released, we freeze the next few frames.
+    // TODO: should we do this for finger lifting? When a finger is lifted, we
+    // usually see some unstable movements too.
     item.x = 0;
     item.y = 0;
     item.scroll = 0;
@@ -212,6 +214,8 @@ void parse_primary_packet(uint64_t packet, int w) {
   int y = (packet >> 40) & 0x00FF | (packet >> 4) & 0x0F00 |
           (packet >> 17) & 0x1000;
   short z = (packet >> 16) & 0xFF;
+  // w is width only if it >= 4. otherwise it encodes finger count
+  short width = max(w, 4);
 
   // A clickpad reprots its button as a middle/up button. This logic needs to
   // change completely if the touchpad is not a clickpad (i.e. it has physical
@@ -386,6 +390,14 @@ void parse_primary_packet(uint64_t packet, int w) {
     float multiplier = finger_count == 1 ? 1.0 : 2.0;
     if (velocity == 0) {
       multiplier *= 1.5;
+      if (width > 4) {
+        // Fat finger
+        multiplier *= 1.0F + (width - 4.0F) / 4.0F;
+      }
+      if (z >= 60) {
+        // Heavy finger
+        multiplier *= 1.0F + (z - 60.0F) / 40.0F;
+      }
     }
 
     int8_t delta_x_hid = to_hid_value(
@@ -443,6 +455,8 @@ void parse_extended_packet(uint64_t packet) {
     finger_states[1].y.filter(y);
     finger_states[1].z = z;
 
+    // TODO: use velocity and z value to adjst the multiplier here too, just
+    // like the primary frames. We don't have width info though.
     if (finger_count >= 2 && button_state == 0) {
       // Since we are parsing secondary packets, we are here every other frame,
       // so we should double the noise threshold.
@@ -461,7 +475,6 @@ void parse_extended_packet(uint64_t packet) {
       }
       queue_report(button_state, 0, 0, scroll_amount);
     } else {
-      // TODO: use velocity here too, just like the primary frames
       int8_t delta_x_hid = to_hid_value(
           delta_x, noise_threshold_tracking_x * 2.0F, scale_tracking_x);
       int8_t delta_y_hid = -to_hid_value(
