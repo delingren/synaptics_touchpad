@@ -154,7 +154,15 @@ void process_pending_packet(uint64_t packet) {
   uint8_t w =
       (packet >> 26) & 0x01 | (packet >> 1) & 0x2 | (packet >> 2) & 0x0C;
 
-  // Disable reporting during the first few frames of a session.
+  // When parsing packets, we queue the reports instead of send them directly.
+  // Then we delay sending them for a few frames, to give us an opportunity to
+  // retrospectively change the reports.
+  // We produce at most one report per frame. So we only need to send one
+  // pending report per frame. Once all activities ceased, the touchpad keeps
+  // sending packets with x, y, and z all set to 0 for one second. And we only
+  // report the first one. That means, we have plenty of time to clear up the
+  // report queue, which we need to do. Otherwise the queue will get clogged up
+  // soon, and reports leak to the next session, causing weird behaviors.
   if (global_tick - session_started_tick >= frames_delay) {
     if (!reports.empty()) {
       report item = reports.pop_front();
@@ -427,8 +435,8 @@ void parse_extended_packet(uint64_t packet) {
           to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
       if (abs(delta_y) <= slow_scroll_threshold) {
         if ((global_tick - slow_scroll_started_tick) %
-              slow_scroll_frames_per_detent ==
-          0) {
+                slow_scroll_frames_per_detent ==
+            0) {
           scroll_amount = sign(scroll_amount);
         } else {
           scroll_amount = 0;
