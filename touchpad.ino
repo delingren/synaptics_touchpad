@@ -41,7 +41,7 @@
 // fine turning them.
 
 // When finger is held *still*, the maximum flucation from frame to frame in mm.
-const float noise_threshold_tracking_mm = 0.04;
+const float noise_threshold_tracking_mm = 0.08;
 const float noise_threshold_scrolling_mm = 0.09;
 
 // In order to retrospectively change the frames in the past, we delay reporting
@@ -54,7 +54,7 @@ const int frames_delay = 6;
 const int frames_stablization = 15;
 
 // HID units per mm, when tracking.
-const float scale_tracking_mm = 18.0;
+const float scale_tracking_mm = 12.0;
 // HID units per mm, when scrolling.
 const float scale_scroll_mm = 1.6;
 // Cutoff speed between slow and fast scrolling, in mm per frame.
@@ -205,9 +205,6 @@ void queue_report(uint8_t buttons, int8_t x, int8_t y, int8_t scroll) {
 }
 
 void parse_primary_packet(uint64_t packet, int w) {
-  // we only use 0 and 1 at this moment to indicate if the finger is moving
-  static unsigned int velocity = 0;
-
   // Reference: Section 3.2.1, Figure 3-4
   int x = (packet >> 32) & 0x00FF | (packet >> 0) & 0x0F00 |
           (packet >> 16) & 0x1000;
@@ -236,25 +233,38 @@ void parse_primary_packet(uint64_t packet, int w) {
     session_started_tick = global_tick;
   }
 
-  // When a button is pressed, we retrospectively freeze the previous frames.
+  /* Mechanisms to smooth the movements. */
+
+  // When a button is pressed, we retrospectively freeze the previous frames,
+  // since the movements tend to be jerky when releasing a button.
   if (button && button_state == 0) {
     int size = reports.size();
-    Serial.print("Freezing previous frames ");
-    Serial.println(size);
     for (int i = 0; i < size; i++) {
       reports[i].x = 0;
       reports[i].y = 0;
+      reports[i].scroll = 0;
     }
   }
 
-  // When a button is released, we freeze the next few frames.
+  // When a button is released, we freeze the next few frames, since the
+  // movements tend to be jerky when pressing a button.
   if (!button && button_state != 0) {
     button_released_tick = global_tick;
   }
 
-  // Update state variables.
+  // When a finger is lifted, we restrospectively freeze the previous
+  // frames, since the movements tend to be jerky when lifting a finger.
+  if (new_finger_count < finger_count) {
+    for (int i = 0; i < reports.size(); i++) {
+      reports[i].x = 0;
+      reports[i].y = 0;
+      reports[i].scroll = 0;
+    }
+  }
+
+  /* Update state variables. */
   if (new_finger_count > finger_count) {
-    // A finger has been added. Reset the secondary finger state.
+    // A finger has been added. Reset state for that finger.
     finger_states[1].x.reset();
     finger_states[1].y.reset();
     if (finger_count == 0) {
@@ -302,7 +312,7 @@ void parse_primary_packet(uint64_t packet, int w) {
         }
       }
     } else {
-      // 3 fingers -> 2 fingers or 1 finger.
+      // 3 fingers -> 2 fingers or 1 finger, or all fingers have been lifted.
       // Let's not bother. Just reset both fingers.
       finger_states[0].x.reset();
       finger_states[0].y.reset();
@@ -329,7 +339,7 @@ void parse_primary_packet(uint64_t packet, int w) {
 
   finger_count = new_finger_count;
 
-  // Determine state.
+  /* State machine logic */
   if (finger_count == 0) {
     // idle
     if (button_state == 0 && button) {
@@ -337,7 +347,7 @@ void parse_primary_packet(uint64_t packet, int w) {
       queue_report(button_state, 0, 0, 0);
     } else if (button_state != 0 && !button) {
       button_state = 0;
-      queue_report(button_state, 0, 0, 0);
+      queue_report(0, 0, 0, 0);
     }
   } else if (finger_count >= 2 && button_state == 0) {
     // scrolling
@@ -387,31 +397,38 @@ void parse_primary_packet(uint64_t packet, int w) {
     }
     // If there are multiple fingers pressed, normal packets and secondary
     // packets are alternated. So we should double the threshold.
-    float multiplier = finger_count == 1 ? 1.0 : 2.0;
-    if (velocity == 0) {
-      multiplier *= 1.5;
-      if (width > 4) {
-        // Fat finger
-        multiplier *= 1.0F + (width - 4.0F) / 4.0F;
-      }
-      if (z >= 60) {
-        // Heavy finger
-        multiplier *= 1.0F + (z - 60.0F) / 40.0F;
-      }
+    float threshold_multiplier = finger_count == 1 ? 1.0 : 2.0;
+    // Serial.print("Width: ");
+    // Serial.print(width);
+    // Serial.print(" Pressure: ");
+    // Serial.println(z);
+
+    if (width > 4) {
+      // Fat finger
+      threshold_multiplier *= 1.0F + (width - 4.0F) / 4.0F;
+    }
+    if (z >= 60) {
+      // Heavy finger
+      threshold_multiplier *= 1.0F + (z - 60.0F) / 40.0F;
     }
 
-    int8_t delta_x_hid = to_hid_value(
-        delta_x, noise_threshold_tracking_x * multiplier, scale_tracking_x);
+    float delta_x_mm = ((float)delta_x) / ((float)synaptics::units_per_mm_x);
+    float delta_y_mm = ((float)delta_y) / ((float)synaptics::units_per_mm_y);
+    // Precision for low speed and range for high speed. If there are more than
+    // one finger the speed needs to be doubled.
+    float velocity = sqrt(delta_x_mm * delta_x_mm + delta_y_mm * delta_y_mm);
+    if (finger_count > 1) {
+      velocity *= 2;
+    }
+    float scale_multiplier = 1.0F + velocity * 0.5F;  // Emperical constant
+
+    int8_t delta_x_hid =
+        to_hid_value(delta_x, noise_threshold_tracking_x * threshold_multiplier,
+                     scale_tracking_x * scale_multiplier);
     int8_t delta_y_hid = -to_hid_value(
-        delta_y, noise_threshold_tracking_y * multiplier, scale_tracking_y);
+        delta_y, noise_threshold_tracking_y * threshold_multiplier,
+        scale_tracking_y * scale_multiplier);
     queue_report(button_state, delta_x_hid, delta_y_hid, 0);
-
-    if (delta_x_hid != 0 || delta_y_hid != 0) {
-      // TODO: more precisely calculate velocity
-      velocity = 1;
-    } else {
-      velocity = 0;
-    }
   }
 }
 
