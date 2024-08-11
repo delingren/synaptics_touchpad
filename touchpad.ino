@@ -250,7 +250,6 @@ void parse_primary_packet(uint64_t packet, int w) {
   // When a button is pressed, we retrospectively freeze the previous frames,
   // since the movements tend to be jerky when releasing a button.
   if (button && button_state == 0) {
-    Serial.println("Button down");
     int size = reports.size();
     for (int i = 0; i < size; i++) {
       reports[i].x = 0;
