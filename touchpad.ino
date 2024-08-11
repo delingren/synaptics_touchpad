@@ -57,13 +57,15 @@ const int frames_stablization = 15;
 const float scale_tracking_mm = 12.0;
 // HID units per mm, when scrolling.
 const float scale_scroll_mm = 1.6;
-// Cutoff speed between slow and fast scrolling, in mm per frame.
+// Cutoff speed between slow and fast scrolling, in mm/frame.
 const float slow_scroll_threshold_mm = 2.0;
 // Max distance between two frames.
 const float max_delta_mm = 3;
 // The delta in either direction within which is considered normal movements
 // between frames while scrolling at a moderate speed.
 const int proximity_threshold_mm = 15;
+// The amount of scroll per detent, in HID units
+const float slow_scroll_amount = 0.20F;
 
 // HID units per raw unit, when tracking.
 float scale_tracking_x, scale_tracking_y;
@@ -78,10 +80,6 @@ float noise_threshold_scrolling_y;
 float max_delta_x, max_delta_y;
 // Cutoff speed between slow and fast scrolling, in raw units per frame.
 float slow_scroll_threshold;
-// The number of frames after which we send a scroll to the host in slow
-// scrolling mode. Technically the frame number is twice this number since
-// we're receiving alternating primary and secondary packets.
-const int slow_scroll_frames_per_detent = 7;
 // The delta within which is considered normal movements between frames while
 // scrolling at a moderate speed.
 float proximity_threshold_x, proximity_threshold_y;
@@ -106,7 +104,6 @@ RingBuffer<report, 32> reports;
 
 static unsigned long global_tick = 0;
 static unsigned long session_started_tick = 0;
-static unsigned long slow_scroll_started_tick = 0;
 static unsigned long button_released_tick = 0;
 
 // State of primary and secondary fingers. We only keep track of two since this
@@ -182,7 +179,7 @@ void process_pending_packet(uint64_t packet) {
   }
 }
 
-int8_t to_hid_value(float value, float threshold, float scale_factor) {
+float to_hid_value(float value, float threshold, float scale_factor) {
   const float hid_max = 127.0F;
   if (abs(value) < threshold) {
     return 0;
@@ -190,16 +187,31 @@ int8_t to_hid_value(float value, float threshold, float scale_factor) {
   return sign(value) * min(max(abs(value) * scale_factor, 1.0F), hid_max);
 }
 
-void queue_report(uint8_t buttons, int8_t x, int8_t y, int8_t scroll) {
-  report item = {.buttons = buttons, .x = x, .y = y, .scroll = scroll};
+void queue_report(uint8_t buttons, int8_t x, int8_t y, float scroll) {
+  static float scroll_amount_rollover = 0;
+  report item = {.buttons = buttons};
   if (button_released_tick != 0 &&
       global_tick - button_released_tick < frames_stablization) {
     // When a button is released, we freeze the next few frames.
-    // TODO: should we do this for finger lifting? When a finger is lifted, we
-    // usually see some unstable movements too.
     item.x = 0;
     item.y = 0;
     item.scroll = 0;
+  } else {
+    if (scroll > -1.0F && scroll < 1.0F) {
+      scroll_amount_rollover += scroll;
+      if (scroll_amount_rollover >= 1.0F) {
+        scroll = 1.0F;
+        scroll_amount_rollover -= 1.0F;
+      } else if (scroll_amount_rollover <= -1.0F) {
+        scroll = -1.0F;
+        scroll_amount_rollover += 1.0F;
+      } else {
+        scroll = 0;
+      }
+    }
+    item.x = x;
+    item.y = y;
+    item.scroll = scroll;
   }
   reports.push_back(item);
 }
@@ -238,6 +250,7 @@ void parse_primary_packet(uint64_t packet, int w) {
   // When a button is pressed, we retrospectively freeze the previous frames,
   // since the movements tend to be jerky when releasing a button.
   if (button && button_state == 0) {
+    Serial.println("Button down");
     int size = reports.size();
     for (int i = 0; i < size; i++) {
       reports[i].x = 0;
@@ -360,30 +373,12 @@ void parse_primary_packet(uint64_t packet, int w) {
 
     // Since we're scrolling, we are here every other frame. So we should double
     // the noise threshold.
-    int scroll_amount =
+    float scroll_amount =
         to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
     if (abs(delta_y) <= slow_scroll_threshold) {
-      if (slow_scroll_started_tick == 0) {
-        slow_scroll_started_tick = global_tick - 1;
-      }
-      if ((global_tick - slow_scroll_started_tick) %
-              slow_scroll_frames_per_detent ==
-          0) {
-        scroll_amount = sign(scroll_amount);
-      } else {
-        scroll_amount = 0;
-      }
-    } else {
-      slow_scroll_started_tick = 0;
+      scroll_amount = sign(scroll_amount) * slow_scroll_amount;
     }
-
     queue_report(button_state, 0, 0, scroll_amount);
-
-    if (new_finger_count < 2 || button != 0) {
-      // We are going to leave scrolling state in the next frame. Reset slow
-      // scroll count.
-      slow_scroll_started_tick = 0;
-    }
   } else if (finger_count == 1 || finger_count >= 2 && button_state != 0) {
     // 1-finger tracking or 2-finger tracking
     if (button) {
@@ -477,18 +472,10 @@ void parse_extended_packet(uint64_t packet) {
     if (finger_count >= 2 && button_state == 0) {
       // Since we are parsing secondary packets, we are here every other frame,
       // so we should double the noise threshold.
-      int scroll_amount =
+      float scroll_amount =
           to_hid_value(delta_y, noise_threshold_scrolling_y, scale_scroll);
       if (abs(delta_y) <= slow_scroll_threshold) {
-        if ((global_tick - slow_scroll_started_tick) %
-                slow_scroll_frames_per_detent ==
-            0) {
-          scroll_amount = sign(scroll_amount);
-        } else {
-          scroll_amount = 0;
-        }
-      } else {
-        slow_scroll_started_tick = 0;
+        scroll_amount = sign(scroll_amount) * slow_scroll_amount;
       }
       queue_report(button_state, 0, 0, scroll_amount);
     } else {
