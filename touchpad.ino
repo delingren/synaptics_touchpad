@@ -494,7 +494,7 @@ void setup() {
   // the touchpad. 500ms seems to be a good time. It's still not bullet proof
   // but the error handling mechanism seems to be able to recover every time.
   delay(500);
-  ps2::begin(7, 8, byte_received);
+  ps2::begin(0, 1, byte_received);
   ps2::reset();
   synaptics::init();
 
