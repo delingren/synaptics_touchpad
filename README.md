@@ -168,6 +168,7 @@ One thing I noticed is that the finger tends to be very unstable while pressing 
 ## TODOs
 * Make it more stable with thumb clicks. I'm still a little unhappy when I use the thumb to press the button and another finger to move the cursor. I use this a lot to select text. The thumb position is not very stable although my intention is to keep it still. This can probably be improved by checking the width of the finger, which is reported. A fat finger probably should be given more leeway when it comes to determining the movements. The idea I got from ThinkPad might be helpful here.
 * Make it more stable when lifting a finger. Lifting a finger tends to brush it over the touchpad and create an unwanted movement. Since we already have a delayed reporting in place, I think we can just go back and change the last few frames when we detect a finger lift.
+* Tap as click. I was originally against this idea. But it's been growing on me after daily driving a bunch of PC laptops. It's kinda convenient, I have to admit. And it shouldn't be too hard to implement: a short session where the finger movements have never exceeded the noise threshold, we send a button down and a button up reports.
 * Horizontal scrolling. I think this is a standard USB HID feature and should be relatively easy to implement. I need to check the USB HID spec, which is very dry to read.
 * Three finger swipes as back or forward button. USB HID supports at least 5 buttons so this should be doable.
 * Zooming with two fingers. I'm not sure if this is doable.
