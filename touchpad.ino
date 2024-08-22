@@ -163,7 +163,7 @@ void process_pending_packet(uint64_t packet) {
   if (global_tick - session_started_tick >= frames_delay) {
     if (!reports.empty()) {
       report item = reports.pop_front();
-      hid::report(item.buttons, item.x, item.y, item.scroll);
+      hid::report(item.buttons, item.x, item.y, item.scroll, 0);
     }
   }
 
