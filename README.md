@@ -8,14 +8,13 @@ Goals:
 * Cursor movements.
 * Left click and right click (with two fingers).
 * Two-finger scrolling.
-* Make a housing for it.
+* Make an enclosure with a USB-C connector.
 
 Status:
 * Everything listed above is fully implemented.
 * No rigorous testing has been done.
 * Some basic error handling is done.
 * I have no problem using it as a daily drive.
-* Housing is not done yet. I want to use a USB-C connector. My dev board is micro USB. I need to either get a USB-C dev board (such as Elite-C) or a USB-C breakout PCB.
 
 Most laptop touchpads are made by Synaptics. They usually use a PS/2 interface. By default (i.e. without any special drivers), they can usually simulate a regular PS/2 mouse. I.e. they can report finger movements and button clicks. But that's about it. They don't support more sophisticated gestures we normally find on laptops. To achieve those gestures, we need to implement proprietary but published (with some caveats) Synaptics protocols, documented in [Synaptics PS/2 TouchPad Interfacing Guide](touchpad_RevB.pdf).
 
@@ -175,7 +174,7 @@ One thing I noticed is that the finger tends to be very unstable while pressing 
 * Velocity tracking and inertia. If we keep track of the speed of the movements, we can implement a lot of interesting features. One example is inertia, where if you've been scrolling, after the fingers have been released, it still keeps going for a little, slowing down gradually. Another potential application is to keep the noise tolerance high at zero/very low speed, reducing it once the fingers are moving. This way, we can provide better precision control at low speed.
 
 ## Enclosure
-I designed the enclosure in Fusion 360 and 3D printed it. The stl and original f3d files can be found under `enclosure` folder.
+I designed the enclosure in Fusion 360 and 3D printed it. The stl and original f3d files can be found under `enclosure` folder. I used a ProMicro clone with a USB-C connector. It has the same footprint as the original ProMicro.
 
 The end result:
 
